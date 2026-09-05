@@ -1,0 +1,10 @@
+Carnet d'audition v3.1.0-beta.3
+
+- SpeechRecognizer direct, sans EXTRA_AUDIO_SOURCE injecté.
+- Manifest Android : requête RecognitionService ajoutée.
+- AudioRecord non privacy-sensitive sur Android 11+ pour faciliter le partage avec le service vocal système.
+- Redémarrage automatique de la session de dictée après une pause/résultat tant que l'enregistrement continue.
+- WAV conservé par chemin natif ; pas de conversion Base64 à l'arrêt.
+- Conversion Base64 différée jusqu'à l'export .pvaud.
+- Whisper automatique désactivé par défaut pour préserver la réactivité.
+- Migration des anciens réglages beta.2 vers le mode rapide.

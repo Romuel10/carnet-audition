@@ -1,5 +1,5 @@
 (() => {
-  const APP_VERSION = '3.1.0-beta.2';
+  const APP_VERSION = '3.1.0-beta.3';
   const STORAGE_KEY = 'assistant-pv-carnet-draft-v1';
   const PROFILE_KEY = 'assistant-pv-carnet-investigator-profile-v1';
   const AI_SETTINGS_KEY = 'assistant-pv-carnet-ai-settings-v1';
@@ -50,6 +50,8 @@ Madagasikara`;
         stopRecording: call('stopRecording'),
         cancelRecording: call('cancelRecording'),
         getTranscriptionState: call('getTranscriptionState'),
+        readAudioFile: call('readAudioFile'),
+        deleteAudioFile: call('deleteAudioFile'),
         saveAuditionFile: call('saveAuditionFile'),
       };
     }
@@ -117,18 +119,22 @@ Madagasikara`;
   function initAiSettings() {
     let cfg = null;
     try { cfg = JSON.parse(localStorage.getItem(AI_SETTINGS_KEY) || 'null'); } catch (_) { cfg = null; }
+    const migrated = Number(cfg?.settingsVersion || 0) < 3;
     if (!$('#speechDictionary').value.trim()) $('#speechDictionary').value = cfg?.dictionary || DEFAULT_DICTIONARY;
     if (cfg?.engine && $('#speechEngine')) $('#speechEngine').value = cfg.engine;
     if (cfg?.model && $('#whisperModel')) $('#whisperModel').value = cfg.model;
-    if (cfg?.aiReviewAfterStop !== undefined) $('#aiReviewAfterStop').checked = Boolean(cfg.aiReviewAfterStop);
+    // Beta.3 privilégie la réactivité : Whisper n'est plus lancé automatiquement après chaque arrêt.
+    $('#aiReviewAfterStop').checked = migrated ? false : Boolean(cfg?.aiReviewAfterStop);
     if (cfg?.keepLiveAlternative !== undefined) $('#keepLiveAlternative').checked = Boolean(cfg.keepLiveAlternative);
     if (cfg?.learnFromCorrections !== undefined) $('#learnFromCorrections').checked = Boolean(cfg.learnFromCorrections);
+    if (migrated) persistAiSettings();
     ['speechEngine','whisperModel','speechDictionary','aiReviewAfterStop','keepLiveAlternative','learnFromCorrections'].forEach(id => $(`#${id}`)?.addEventListener('change', persistAiSettings));
     $('#speechDictionary')?.addEventListener('input', persistAiSettings);
   }
 
   function persistAiSettings() {
     const next = {
+      settingsVersion: 3,
       engine: $('#speechEngine')?.value || 'smart',
       model: $('#whisperModel')?.value || 'base-q5_1',
       dictionary: $('#speechDictionary')?.value || DEFAULT_DICTIONARY,
@@ -143,9 +149,11 @@ Madagasikara`;
     const mode = $('#speechEngine').value;
     if (mode === 'smart') {
       $('#autoTranscription').checked = true;
-      $('#aiReviewAfterStop').checked = true;
+      $('#localSpeechOnly').checked = false;
+      $('#aiReviewAfterStop').checked = false;
     } else if (mode === 'live') {
       $('#autoTranscription').checked = true;
+      $('#localSpeechOnly').checked = false;
       $('#aiReviewAfterStop').checked = false;
     } else if (mode === 'offline') {
       $('#autoTranscription').checked = false;
@@ -349,6 +357,7 @@ Madagasikara`;
       signatureAfter: Boolean(overrides.signatureAfter), questionClipId: overrides.questionClipId || '', answerClipId: overrides.answerClipId || '',
       questionDurationMs: Number(overrides.questionDurationMs || 0), answerDurationMs: Number(overrides.answerDurationMs || 0),
       questionMimeType: overrides.questionMimeType || '', answerMimeType: overrides.answerMimeType || '',
+      questionAudioPath: overrides.questionAudioPath || '', answerAudioPath: overrides.answerAudioPath || '',
       questionLiveTranscript: overrides.questionLiveTranscript || '', answerLiveTranscript: overrides.answerLiveTranscript || '',
       questionAiTranscript: overrides.questionAiTranscript || '', answerAiTranscript: overrides.answerAiTranscript || '',
       questionAiModel: overrides.questionAiModel || '', answerAiModel: overrides.answerAiModel || '',
@@ -401,6 +410,8 @@ Madagasikara`;
       if (state.activeRecording) return toast('Arrêtez d’abord l’enregistrement en cours.');
       if (exchange.questionClipId) await deleteClip(exchange.questionClipId);
       if (exchange.answerClipId) await deleteClip(exchange.answerClipId);
+      if (exchange.questionAudioPath && NativeAudioRecorder?.deleteAudioFile) await NativeAudioRecorder.deleteAudioFile({ path: exchange.questionAudioPath }).catch(() => {});
+      if (exchange.answerAudioPath && NativeAudioRecorder?.deleteAudioFile) await NativeAudioRecorder.deleteAudioFile({ path: exchange.answerAudioPath }).catch(() => {});
       state.exchanges = state.exchanges.filter(x => x.id !== exchange.id);
       renderExchanges();
       saveDraft();
@@ -425,7 +436,7 @@ Madagasikara`;
 
   async function startRecording(exchange, kind, card) {
     if (NativeAudioRecorder) return startNativeRecording(exchange, kind, card);
-    if (isNativeAndroid) throw new Error('Pont audio natif indisponible. Réinstallez la v3.1 beta.2 puis relancez l’application.');
+    if (isNativeAndroid) throw new Error('Pont audio natif indisponible. Réinstallez la v3.1 beta.3 puis relancez l’application.');
     return startWebRecording(exchange, kind, card);
   }
 
@@ -487,29 +498,28 @@ Madagasikara`;
       status.textContent = 'Enregistrement terminé • sauvegarde…';
       const result = await NativeAudioRecorder.stopRecording();
       const data = result?.value || result || {};
-      const base64 = data.recordDataBase64 || '';
-      if (!base64) throw new Error('Aucune donnée audio reçue.');
+      const audioPath = String(data.path || '');
+      if (!audioPath) throw new Error('Le fichier audio n’a pas été créé.');
       const mimeType = data.mimeType || 'audio/wav';
-      const blob = base64ToBlob(base64, mimeType);
       const durationMs = Number(data.msDuration || (Date.now() - active.startedAt) || 0);
-      const clipId = `${exchange.id}-${kind}-${uid()}`;
-      await putClip(clipId, blob);
-      const oldClip = kind === 'question' ? exchange.questionClipId : exchange.answerClipId;
+      const oldClip = exchange[`${kind}ClipId`];
       if (oldClip) await deleteClip(oldClip);
-      exchange[`${kind}ClipId`] = clipId;
+      exchange[`${kind}ClipId`] = '';
+      const oldPath = exchange[`${kind}AudioPath`];
+      if (oldPath && oldPath !== audioPath && NativeAudioRecorder?.deleteAudioFile) await NativeAudioRecorder.deleteAudioFile({ path: oldPath }).catch(() => {});
+      exchange[`${kind}AudioPath`] = audioPath;
       exchange[`${kind}DurationMs`] = durationMs;
       exchange[`${kind}MimeType`] = mimeType;
       const player = $(`.${kind}-player`, card);
-      player.src = URL.createObjectURL(blob);
+      player.src = CapacitorRuntime?.convertFileSrc ? CapacitorRuntime.convertFileSrc(audioPath) : audioPath;
       player.hidden = false;
-      await sleep(700);
       try { await pollNativeTranscript(active, true); } catch (_) {}
       const textarea = $(`.${kind}-text`, card);
       const liveText = textarea.value.trim();
       exchange[`${kind}LiveTranscript`] = liveText;
-      status.textContent = `Audio + texte conservés • ${formatDuration(durationMs)}`;
+      status.textContent = liveText ? `Audio + texte conservés • ${formatDuration(durationMs)}` : `Audio conservé • ${formatDuration(durationMs)} • texte direct indisponible`;
       saveDraft();
-      await maybeReviewWithWhisper({ active, exchange, kind, card, status, audioPath: data.path || '', durationMs, liveText });
+      await maybeReviewWithWhisper({ active, exchange, kind, card, status, audioPath, durationMs, liveText });
     } catch (error) {
       console.error(error);
       status.textContent = 'Échec de l’enregistrement.';
@@ -651,7 +661,7 @@ Madagasikara`;
   async function runNativeDiagnostics() {
     const el = $('#exportStatus');
     if (!NativeAudioRecorder) {
-      el.textContent = 'ERREUR : pont audio natif indisponible. Vérifiez que la v3.1 beta.2 est bien installée.';
+      el.textContent = 'ERREUR : pont audio natif indisponible. Vérifiez que la v3.1 beta.3 est bien installée.';
       return;
     }
     try {
@@ -680,12 +690,20 @@ Madagasikara`;
   window.addEventListener('unhandledrejection', event => rememberRuntimeError('Promise', event.reason));
 
   async function hydratePlayer(exchange, kind) {
+    const card = document.querySelector(`[data-exchange-id="${CSS.escape(exchange.id)}"]`);
+    if (!card) return;
+    const audioPath = exchange[`${kind}AudioPath`];
+    const player = $(`.${kind}-player`, card);
+    if (audioPath && isNativeAndroid) {
+      player.src = CapacitorRuntime?.convertFileSrc ? CapacitorRuntime.convertFileSrc(audioPath) : audioPath;
+      player.hidden = false;
+      $(`.${kind}-status`, card).textContent = `Audio conservé • ${formatDuration(exchange[`${kind}DurationMs`])}`;
+      return;
+    }
     const clipId = exchange[`${kind}ClipId`];
     if (!clipId) return;
     const blob = await getClip(clipId);
-    const card = document.querySelector(`[data-exchange-id="${CSS.escape(exchange.id)}"]`);
-    if (!blob || !card) return;
-    const player = $(`.${kind}-player`, card);
+    if (!blob) return;
     player.src = URL.createObjectURL(blob);
     player.hidden = false;
     $(`.${kind}-status`, card).textContent = `Audio conservé • ${formatDuration(exchange[`${kind}DurationMs`])}`;
@@ -698,7 +716,7 @@ Madagasikara`;
 
   function collectDraft() {
     return {
-      version: 2,
+      version: 3,
       updatedAt: new Date().toISOString(),
       investigatorGrade: $('#investigatorGrade').value,
       investigatorName: $('#investigatorName').value,
@@ -743,12 +761,15 @@ Madagasikara`;
     if (!d) return;
     const ids = ['investigatorGrade','investigatorName','investigatorQuality','investigatorFunction','investigatorUnit','personRole','speechLanguage','personIdentity','identityVerification','place','startDateTime','endDateTime','closingFormula','personSignatureLabel'];
     ids.forEach(id => { if (d[id] !== undefined && $(`#${id}`)) $(`#${id}`).value = d[id]; });
+    const legacyDraft = Number(d.version || 0) < 3;
     if (d.autoTranscription !== undefined) $('#autoTranscription').checked = Boolean(d.autoTranscription);
-    if (d.localSpeechOnly !== undefined) $('#localSpeechOnly').checked = Boolean(d.localSpeechOnly);
+    if (legacyDraft) $('#localSpeechOnly').checked = false;
+    else if (d.localSpeechOnly !== undefined) $('#localSpeechOnly').checked = Boolean(d.localSpeechOnly);
     if (d.speechEngine && $('#speechEngine')) $('#speechEngine').value = d.speechEngine;
     if (d.whisperModel && $('#whisperModel')) $('#whisperModel').value = d.whisperModel;
     if (d.speechDictionary !== undefined && $('#speechDictionary')) $('#speechDictionary').value = d.speechDictionary;
-    if (d.aiReviewAfterStop !== undefined && $('#aiReviewAfterStop')) $('#aiReviewAfterStop').checked = Boolean(d.aiReviewAfterStop);
+    if (legacyDraft) $('#aiReviewAfterStop').checked = false;
+    else if (d.aiReviewAfterStop !== undefined && $('#aiReviewAfterStop')) $('#aiReviewAfterStop').checked = Boolean(d.aiReviewAfterStop);
     if (d.keepLiveAlternative !== undefined && $('#keepLiveAlternative')) $('#keepLiveAlternative').checked = Boolean(d.keepLiveAlternative);
     if (d.learnFromCorrections !== undefined && $('#learnFromCorrections')) $('#learnFromCorrections').checked = Boolean(d.learnFromCorrections);
     state.exchanges = Array.isArray(d.exchanges) ? d.exchanges.map(makeExchange) : [];
@@ -767,6 +788,19 @@ Madagasikara`;
         const keepLive = $('#keepLiveAlternative')?.checked !== false;
         const item = { question: exchange.question, answer: exchange.answer, signatureAfter: exchange.signatureAfter, transcription: { question: { live: keepLive ? (exchange.questionLiveTranscript || '') : '', ai: exchange.questionAiTranscript || '', model: exchange.questionAiModel || '', elapsedMs: exchange.questionAiElapsedMs || 0 }, answer: { live: keepLive ? (exchange.answerLiveTranscript || '') : '', ai: exchange.answerAiTranscript || '', model: exchange.answerAiModel || '', elapsedMs: exchange.answerAiElapsedMs || 0 } } };
         for (const kind of ['question','answer']) {
+          const audioPath = exchange[`${kind}AudioPath`];
+          if (audioPath && isNativeAndroid && NativeAudioRecorder?.readAudioFile) {
+            const audio = await NativeAudioRecorder.readAudioFile({ path: audioPath });
+            if (audio?.dataBase64) {
+              item[`${kind}Audio`] = {
+                clipId: `${exchange.id}-${kind}`,
+                mimeType: audio.mimeType || exchange[`${kind}MimeType`] || 'audio/wav',
+                durationMs: exchange[`${kind}DurationMs`] || 0,
+                dataBase64: audio.dataBase64,
+              };
+              continue;
+            }
+          }
           const clipId = exchange[`${kind}ClipId`];
           if (!clipId) continue;
           const blob = await getClip(clipId);
@@ -853,6 +887,12 @@ Madagasikara`;
   async function resetAll() {
     if (state.activeRecording) stopActiveRecording();
     localStorage.removeItem(STORAGE_KEY);
+    for (const exchange of state.exchanges) {
+      for (const kind of ['question','answer']) {
+        const path = exchange[`${kind}AudioPath`];
+        if (path && NativeAudioRecorder?.deleteAudioFile) await NativeAudioRecorder.deleteAudioFile({ path }).catch(() => {});
+      }
+    }
     await clearClips();
     state.exchanges = [];
     ['personIdentity','identityVerification','endDateTime'].forEach(id => $('#'+id).value = '');

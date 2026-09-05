@@ -14,9 +14,12 @@ if (!fs.existsSync(manifest)) {
 }
 
 let manifestText = fs.readFileSync(manifest, 'utf8');
-const recordPerm = '<uses-permission android:name="android.permission.RECORD_AUDIO" />';
 if (!manifestText.includes('android.permission.RECORD_AUDIO')) {
-  manifestText = manifestText.replace(/<manifest([^>]*)>/, `<manifest$1>\n    ${recordPerm}`);
+  manifestText = manifestText.replace(/<manifest([^>]*)>/, '<manifest$1>\n    <uses-permission android:name="android.permission.RECORD_AUDIO" />');
+}
+// SpeechRecognizer doit être découvrable sur Android 11+.
+if (!manifestText.includes('android.speech.RecognitionService')) {
+  manifestText = manifestText.replace(/<application\b/, '    <queries>\n        <intent>\n            <action android:name="android.speech.RecognitionService" />\n        </intent>\n    </queries>\n\n    <application');
 }
 manifestText = manifestText.replace(/\s*<uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"\s*\/>\s*/g, '\n');
 fs.writeFileSync(manifest, manifestText);
@@ -38,7 +41,6 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.ParcelFileDescriptor;
 import android.provider.MediaStore;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
@@ -82,15 +84,16 @@ public class NativeAudioRecorderPlugin extends Plugin {
     private long startedAt = 0L;
 
     private SpeechRecognizer speechRecognizer;
-    private ParcelFileDescriptor speechReadFd;
-    private ParcelFileDescriptor speechWriteFd;
-    private OutputStream speechPipeOut;
     private volatile String transcript = "";
     private volatile String finalTranscript = "";
     private volatile String transcriptionStatus = "idle";
     private volatile String transcriptionError = "";
     private volatile boolean transcriptionRequested = false;
     private volatile float transcriptionConfidence = -1.0f;
+    private String speechLanguage = "mg-MG";
+    private boolean speechPreferOffline = false;
+    private String speechBiasingText = "";
+    private volatile boolean speechRestartPending = false;
 
     @PluginMethod
     public void diagnostics(PluginCall call) {
@@ -101,7 +104,8 @@ public class NativeAudioRecorderPlugin extends Plugin {
         ret.put("manufacturer", Build.MANUFACTURER);
         ret.put("model", Build.MODEL);
         ret.put("speechRecognizerAvailable", SpeechRecognizer.isRecognitionAvailable(getContext()));
-        ret.put("liveTranscriptionSupported", Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && SpeechRecognizer.isRecognitionAvailable(getContext()));
+        ret.put("onDeviceRecognizerAvailable", Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && SpeechRecognizer.isOnDeviceRecognitionAvailable(getContext()));
+        ret.put("liveTranscriptionSupported", SpeechRecognizer.isRecognitionAvailable(getContext()));
         call.resolve(ret);
     }
 
@@ -120,11 +124,8 @@ public class NativeAudioRecorderPlugin extends Plugin {
 
     @PermissionCallback
     private void microphonePermsCallback(PluginCall call) {
-        if (getPermissionState("microphone") == PermissionState.GRANTED) {
-            beginRecording(call);
-        } else {
-            call.reject("Autorisation du microphone refusée.", "MISSING_PERMISSION");
-        }
+        if (getPermissionState("microphone") == PermissionState.GRANTED) beginRecording(call);
+        else call.reject("Autorisation du microphone refusée.", "MISSING_PERMISSION");
     }
 
     private void beginRecording(PluginCall call) {
@@ -135,9 +136,9 @@ public class NativeAudioRecorderPlugin extends Plugin {
         transcriptionStatus = "idle";
         transcriptionRequested = Boolean.TRUE.equals(call.getBoolean("transcribe", true));
         transcriptionConfidence = -1.0f;
-        final String language = call.getString("language", "mg-MG");
-        final boolean preferOffline = Boolean.TRUE.equals(call.getBoolean("preferOffline", true));
-        final String biasingText = call.getString("biasingText", "");
+        speechLanguage = call.getString("language", "mg-MG");
+        speechPreferOffline = Boolean.TRUE.equals(call.getBoolean("preferOffline", false));
+        speechBiasingText = call.getString("biasingText", "");
 
         try {
             File dir = new File(getContext().getFilesDir(), "audios");
@@ -148,14 +149,18 @@ public class NativeAudioRecorderPlugin extends Plugin {
             currentFile = new File(dir, "rec-" + System.currentTimeMillis() + ".wav");
 
             int minBuffer = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT);
-            int bufferSize = Math.max(minBuffer, SAMPLE_RATE * 2);
-            audioRecord = new AudioRecord(
-                MediaRecorder.AudioSource.VOICE_RECOGNITION,
-                SAMPLE_RATE,
-                CHANNEL_CONFIG,
-                AUDIO_FORMAT,
-                bufferSize
-            );
+            int bufferSize = Math.max(minBuffer, SAMPLE_RATE);
+            AudioFormat format = new AudioFormat.Builder()
+                .setSampleRate(SAMPLE_RATE)
+                .setEncoding(AUDIO_FORMAT)
+                .setChannelMask(CHANNEL_CONFIG)
+                .build();
+            AudioRecord.Builder builder = new AudioRecord.Builder()
+                .setAudioSource(MediaRecorder.AudioSource.DEFAULT)
+                .setAudioFormat(format)
+                .setBufferSizeInBytes(bufferSize);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) builder.setPrivacySensitive(false);
+            audioRecord = builder.build();
             if (audioRecord.getState() != AudioRecord.STATE_INITIALIZED) {
                 safeReleaseAudioRecord();
                 call.reject("Le microphone Android n’a pas pu être initialisé.", "AUDIO_INIT_FAILED");
@@ -166,14 +171,14 @@ public class NativeAudioRecorderPlugin extends Plugin {
             wavOut.write(new byte[44]);
             pcmBytes = 0L;
 
-            if (transcriptionRequested) setupInjectedSpeechRecognition(language, preferOffline, biasingText);
-            else transcriptionStatus = "disabled";
-
             audioRecord.startRecording();
             startedAt = System.currentTimeMillis();
             recording = true;
             captureThread = new Thread(() -> captureLoop(bufferSize), "AssistantPV-AudioCapture");
             captureThread.start();
+
+            if (transcriptionRequested) setupDirectSpeechRecognition();
+            else transcriptionStatus = "disabled";
 
             JSObject ret = new JSObject();
             ret.put("value", true);
@@ -191,98 +196,111 @@ public class NativeAudioRecorderPlugin extends Plugin {
         }
     }
 
-    private void setupInjectedSpeechRecognition(String language, boolean preferOffline, String biasingText) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || !SpeechRecognizer.isRecognitionAvailable(getContext())) {
+    private void setupDirectSpeechRecognition() {
+        if (!SpeechRecognizer.isRecognitionAvailable(getContext())) {
             transcriptionStatus = "unsupported";
-            transcriptionError = "Reconnaissance vocale injectée non disponible sur cet Android.";
+            transcriptionError = "Aucun service de reconnaissance vocale Android n’est disponible.";
             return;
         }
+        transcriptionStatus = "starting";
+        new Handler(Looper.getMainLooper()).post(() -> startSpeechSession(false));
+    }
+
+    private void startSpeechSession(boolean restart) {
+        if (!recording || !transcriptionRequested) return;
         try {
-            ParcelFileDescriptor[] pipe = ParcelFileDescriptor.createPipe();
-            speechReadFd = pipe[0];
-            speechWriteFd = pipe[1];
-            speechPipeOut = new ParcelFileDescriptor.AutoCloseOutputStream(speechWriteFd);
-            transcriptionStatus = "starting";
-
-            new Handler(Looper.getMainLooper()).post(() -> {
-                try {
-                    speechRecognizer = SpeechRecognizer.createSpeechRecognizer(getContext());
-                    speechRecognizer.setRecognitionListener(new RecognitionListener() {
-                        @Override public void onReadyForSpeech(Bundle params) { transcriptionStatus = "listening"; }
-                        @Override public void onBeginningOfSpeech() { transcriptionStatus = "listening"; }
-                        @Override public void onRmsChanged(float rmsdB) {}
-                        @Override public void onBufferReceived(byte[] buffer) {}
-                        @Override public void onEndOfSpeech() { if (recording) transcriptionStatus = "processing"; }
-                        @Override public void onError(int error) {
+            if (speechRecognizer == null) {
+                speechRecognizer = SpeechRecognizer.createSpeechRecognizer(getContext());
+                speechRecognizer.setRecognitionListener(new RecognitionListener() {
+                    @Override public void onReadyForSpeech(Bundle params) { transcriptionStatus = "listening"; }
+                    @Override public void onBeginningOfSpeech() { transcriptionStatus = "listening"; }
+                    @Override public void onRmsChanged(float rmsdB) {}
+                    @Override public void onBufferReceived(byte[] buffer) {}
+                    @Override public void onEndOfSpeech() { if (recording) transcriptionStatus = "processing"; }
+                    @Override public void onError(int error) {
+                        transcriptionError = speechErrorMessage(error);
+                        if (recording && shouldRestartSpeech(error)) {
+                            transcriptionStatus = "restarting";
+                            scheduleSpeechRestart(220);
+                        } else {
                             transcriptionStatus = "error";
-                            transcriptionError = speechErrorMessage(error);
                         }
-                        @Override public void onResults(Bundle results) {
-                            updateConfidence(results);
-                            String text = bestText(results);
-                            if (!text.isEmpty()) {
-                                finalTranscript = mergeTranscript(finalTranscript, text);
-                                transcript = finalTranscript;
-                            }
-                            transcriptionStatus = recording ? "listening" : "done";
-                        }
-                        @Override public void onPartialResults(Bundle partialResults) {
-                            updateConfidence(partialResults);
-                            String text = bestText(partialResults);
-                            if (!text.isEmpty()) transcript = mergeForPartial(finalTranscript, text);
-                            transcriptionStatus = "listening";
-                        }
-                        @Override public void onEvent(int eventType, Bundle params) {}
-                        @Override public void onSegmentResults(Bundle segmentResults) {
-                            updateConfidence(segmentResults);
-                            String text = bestText(segmentResults);
-                            if (!text.isEmpty()) {
-                                finalTranscript = mergeTranscript(finalTranscript, text);
-                                transcript = finalTranscript;
-                            }
-                            transcriptionStatus = "listening";
-                        }
-                        @Override public void onEndOfSegmentedSession() {
-                            transcriptionStatus = "done";
-                            if (!finalTranscript.isEmpty()) transcript = finalTranscript;
-                        }
-                        @Override public void onLanguageDetection(Bundle results) {}
-                    });
-
-                    Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-                    intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-                    intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, language);
-                    intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-                    intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, preferOffline);
-                    intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
-                    intent.putExtra(RecognizerIntent.EXTRA_ENABLE_FORMATTING, RecognizerIntent.FORMATTING_OPTIMIZE_LATENCY);
-                    if (biasingText != null && !biasingText.trim().isEmpty()) {
-                        ArrayList<String> hints = new ArrayList<>();
-                        for (String line : biasingText.split("\\\\r?\\\\n")) {
-                            String hint = line == null ? "" : line.trim();
-                            if (!hint.isEmpty() && hint.length() <= 80) hints.add(hint);
-                            if (hints.size() >= 120) break;
-                        }
-                        if (!hints.isEmpty()) intent.putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, hints);
                     }
-                    intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, speechReadFd);
-                    intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1);
-                    intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT);
-                    intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, SAMPLE_RATE);
-                    intent.putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_AUDIO_SOURCE);
-                    speechRecognizer.startListening(intent);
-                } catch (Exception error) {
-                    transcriptionStatus = "error";
-                    transcriptionError = safeMessage(error);
-                    closeSpeechPipe();
-                    cleanupSpeechRecognizer();
+                    @Override public void onResults(Bundle results) {
+                        updateConfidence(results);
+                        String text = bestText(results);
+                        if (!text.isEmpty()) {
+                            finalTranscript = mergeTranscript(finalTranscript, text);
+                            transcript = finalTranscript;
+                            transcriptionError = "";
+                        }
+                        if (recording) {
+                            transcriptionStatus = "restarting";
+                            scheduleSpeechRestart(120);
+                        } else transcriptionStatus = "done";
+                    }
+                    @Override public void onPartialResults(Bundle partialResults) {
+                        updateConfidence(partialResults);
+                        String text = bestText(partialResults);
+                        if (!text.isEmpty()) transcript = mergeForPartial(finalTranscript, text);
+                        transcriptionStatus = "listening";
+                    }
+                    @Override public void onEvent(int eventType, Bundle params) {}
+                    @Override public void onSegmentResults(Bundle segmentResults) {
+                        updateConfidence(segmentResults);
+                        String text = bestText(segmentResults);
+                        if (!text.isEmpty()) {
+                            finalTranscript = mergeTranscript(finalTranscript, text);
+                            transcript = finalTranscript;
+                        }
+                    }
+                    @Override public void onEndOfSegmentedSession() {
+                        if (recording) scheduleSpeechRestart(120);
+                    }
+                    @Override public void onLanguageDetection(Bundle results) {}
+                });
+            }
+
+            Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, speechLanguage);
+            intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+            intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
+            if (speechPreferOffline) intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.putExtra(RecognizerIntent.EXTRA_ENABLE_FORMATTING, RecognizerIntent.FORMATTING_OPTIMIZE_LATENCY);
+                if (speechBiasingText != null && !speechBiasingText.trim().isEmpty()) {
+                    ArrayList<String> hints = new ArrayList<>();
+                    for (String line : speechBiasingText.split("\\r?\\n")) {
+                        String hint = line == null ? "" : line.trim();
+                        if (!hint.isEmpty() && hint.length() <= 80) hints.add(hint);
+                        if (hints.size() >= 120) break;
+                    }
+                    if (!hints.isEmpty()) intent.putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, hints);
                 }
-            });
+            }
+            transcriptionStatus = restart ? "restarting" : "starting";
+            speechRecognizer.startListening(intent);
         } catch (Exception error) {
             transcriptionStatus = "error";
             transcriptionError = safeMessage(error);
-            closeSpeechPipe();
         }
+    }
+
+    private boolean shouldRestartSpeech(int error) {
+        return error == SpeechRecognizer.ERROR_NO_MATCH ||
+               error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT ||
+               error == SpeechRecognizer.ERROR_CLIENT ||
+               error == SpeechRecognizer.ERROR_SERVER_DISCONNECTED;
+    }
+
+    private void scheduleSpeechRestart(long delayMs) {
+        if (speechRestartPending || !recording) return;
+        speechRestartPending = true;
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            speechRestartPending = false;
+            if (recording && transcriptionRequested) startSpeechSession(true);
+        }, delayMs);
     }
 
     private void captureLoop(int bufferSize) {
@@ -296,25 +314,10 @@ public class NativeAudioRecorderPlugin extends Plugin {
                         wavOut.write(buffer, 0, read);
                         pcmBytes += read;
                     }
-                    if (speechPipeOut != null) {
-                        try {
-                            speechPipeOut.write(buffer, 0, read);
-                            speechPipeOut.flush();
-                        } catch (Exception pipeError) {
-                            try { speechPipeOut.close(); } catch (Exception ignored) {}
-                            speechPipeOut = null;
-                            if (transcriptionStatus.equals("starting") || transcriptionStatus.equals("listening")) {
-                                transcriptionStatus = "error";
-                                transcriptionError = "Le moteur vocal Android a fermé le flux audio.";
-                            }
-                        }
-                    }
                 }
             }
         } catch (Exception error) {
-            if (recording) {
-                transcriptionError = "Capture audio interrompue : " + safeMessage(error);
-            }
+            if (recording) transcriptionError = "Capture audio interrompue : " + safeMessage(error);
         }
     }
 
@@ -340,13 +343,21 @@ public class NativeAudioRecorderPlugin extends Plugin {
         long duration = Math.max(0L, System.currentTimeMillis() - startedAt);
         try {
             recording = false;
+            new Handler(Looper.getMainLooper()).post(() -> {
+                if (speechRecognizer != null) {
+                    try { speechRecognizer.stopListening(); } catch (Exception ignored) {}
+                }
+            });
             try { audioRecord.stop(); } catch (Exception ignored) {}
             if (captureThread != null) {
-                try { captureThread.join(1500); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                try { captureThread.join(700); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
             }
             synchronized (this) {
-                if (wavOut != null) { try { wavOut.flush(); } catch (Exception ignored) {} try { wavOut.close(); } catch (Exception ignored) {} wavOut = null; }
-                if (speechPipeOut != null) { try { speechPipeOut.close(); } catch (Exception ignored) {} speechPipeOut = null; }
+                if (wavOut != null) {
+                    try { wavOut.flush(); } catch (Exception ignored) {}
+                    try { wavOut.close(); } catch (Exception ignored) {}
+                    wavOut = null;
+                }
             }
             safeReleaseAudioRecord();
             if (file == null || !file.exists() || pcmBytes <= 0L) {
@@ -355,9 +366,7 @@ public class NativeAudioRecorderPlugin extends Plugin {
                 return;
             }
             writeWavHeader(file, pcmBytes);
-            String base64 = fileToBase64(file);
             JSObject value = new JSObject();
-            value.put("recordDataBase64", base64);
             value.put("msDuration", duration);
             value.put("mimeType", "audio/wav");
             value.put("fileExtension", "wav");
@@ -366,7 +375,7 @@ public class NativeAudioRecorderPlugin extends Plugin {
             JSObject ret = new JSObject();
             ret.put("value", value);
             call.resolve(ret);
-            new Handler(Looper.getMainLooper()).postDelayed(this::cleanupSpeechRecognizer, 1800);
+            new Handler(Looper.getMainLooper()).postDelayed(this::cleanupSpeechRecognizer, 900);
         } catch (Exception error) {
             recording = false;
             closeOutputs();
@@ -376,11 +385,47 @@ public class NativeAudioRecorderPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void readAudioFile(PluginCall call) {
+        String path = call.getString("path", "");
+        if (path.isEmpty()) {
+            call.reject("Chemin audio manquant.", "AUDIO_PATH_REQUIRED");
+            return;
+        }
+        try {
+            File file = new File(path);
+            if (!file.exists() || !file.isFile()) {
+                call.reject("Fichier audio introuvable.", "AUDIO_NOT_FOUND");
+                return;
+            }
+            JSObject ret = new JSObject();
+            ret.put("dataBase64", fileToBase64(file));
+            ret.put("mimeType", "audio/wav");
+            ret.put("sizeBytes", file.length());
+            call.resolve(ret);
+        } catch (Exception error) {
+            call.reject("Lecture audio impossible : " + safeMessage(error), "AUDIO_READ_FAILED", error);
+        }
+    }
+
+    @PluginMethod
+    public void deleteAudioFile(PluginCall call) {
+        String path = call.getString("path", "");
+        boolean ok = true;
+        if (!path.isEmpty()) {
+            File file = new File(path);
+            ok = !file.exists() || file.delete();
+        }
+        JSObject ret = new JSObject();
+        ret.put("deleted", ok);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
     public void cancelRecording(PluginCall call) {
         recording = false;
         try { if (audioRecord != null) audioRecord.stop(); } catch (Exception ignored) {}
         if (captureThread != null) {
-            try { captureThread.join(700); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+            try { captureThread.join(500); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
         }
         closeOutputs();
         safeReleaseAudioRecord();
@@ -458,19 +503,7 @@ public class NativeAudioRecorderPlugin extends Plugin {
     private String bestText(Bundle bundle) {
         if (bundle == null) return "";
         ArrayList<String> matches = bundle.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-        String stable = matches != null && !matches.isEmpty() && matches.get(0) != null ? matches.get(0).trim() : "";
-        String unstable = "";
-        try {
-            unstable = bundle.getString("android.speech.extra.UNSTABLE_TEXT", "").trim();
-        } catch (Exception ignored) {}
-        if (unstable.isEmpty()) {
-            try {
-                ArrayList<String> unstableList = bundle.getStringArrayList("android.speech.extra.UNSTABLE_TEXT");
-                if (unstableList != null && !unstableList.isEmpty() && unstableList.get(0) != null) unstable = unstableList.get(0).trim();
-            } catch (Exception ignored) {}
-        }
-        if (!stable.isEmpty() && !unstable.isEmpty() && !stable.endsWith(unstable)) return (stable + " " + unstable).trim();
-        return !stable.isEmpty() ? stable : unstable;
+        return matches != null && !matches.isEmpty() && matches.get(0) != null ? matches.get(0).trim() : "";
     }
 
     private String mergeForPartial(String finalPart, String partial) {
@@ -504,6 +537,7 @@ public class NativeAudioRecorderPlugin extends Plugin {
             case SpeechRecognizer.ERROR_NO_MATCH: return "parole non reconnue";
             case SpeechRecognizer.ERROR_RECOGNIZER_BUSY: return "moteur vocal occupé";
             case SpeechRecognizer.ERROR_SERVER: return "service vocal indisponible";
+            case SpeechRecognizer.ERROR_SERVER_DISCONNECTED: return "service vocal déconnecté";
             case SpeechRecognizer.ERROR_SPEECH_TIMEOUT: return "aucune parole détectée";
             default: return "erreur vocale " + error;
         }
@@ -542,7 +576,7 @@ public class NativeAudioRecorderPlugin extends Plugin {
 
     private String fileToBase64(File file) throws Exception {
         try (FileInputStream in = new FileInputStream(file); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            byte[] buffer = new byte[8192];
+            byte[] buffer = new byte[64 * 1024];
             int read;
             while ((read = in.read(buffer)) != -1) out.write(buffer, 0, read);
             return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);
@@ -551,15 +585,6 @@ public class NativeAudioRecorderPlugin extends Plugin {
 
     private synchronized void closeOutputs() {
         if (wavOut != null) { try { wavOut.close(); } catch (Exception ignored) {} wavOut = null; }
-        if (speechPipeOut != null) { try { speechPipeOut.close(); } catch (Exception ignored) {} speechPipeOut = null; }
-        if (speechReadFd != null) { try { speechReadFd.close(); } catch (Exception ignored) {} speechReadFd = null; }
-        speechWriteFd = null;
-    }
-
-    private void closeSpeechPipe() {
-        if (speechPipeOut != null) { try { speechPipeOut.close(); } catch (Exception ignored) {} speechPipeOut = null; }
-        if (speechReadFd != null) { try { speechReadFd.close(); } catch (Exception ignored) {} speechReadFd = null; }
-        speechWriteFd = null;
     }
 
     private void safeReleaseAudioRecord() {
@@ -570,6 +595,7 @@ public class NativeAudioRecorderPlugin extends Plugin {
     }
 
     private void cleanupSpeechRecognizer() {
+        speechRestartPending = false;
         SpeechRecognizer recognizer = speechRecognizer;
         speechRecognizer = null;
         if (recognizer != null) {
@@ -578,7 +604,6 @@ public class NativeAudioRecorderPlugin extends Plugin {
                 try { recognizer.destroy(); } catch (Exception ignored) {}
             });
         }
-        if (!recording) closeSpeechPipe();
     }
 
     private String safeMessage(Throwable error) {
@@ -614,5 +639,5 @@ public class MainActivity extends BridgeActivity {
 `;
 fs.writeFileSync(mainActivity, activitySource);
 
-console.log('Enregistreur Android natif + transcription live intégrés :', pluginFile);
-console.log('AudioRecord 16 kHz mono WAV + injection SpeechRecognizer API 33+ + export .pvaud vers Téléchargements/AssistantPV.');
+console.log('Enregistreur Android natif v3.1 beta.3 intégré :', pluginFile);
+console.log('Audio WAV immédiat + SpeechRecognizer direct en parallèle + export différé des données audio.');
