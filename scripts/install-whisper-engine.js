@@ -144,7 +144,7 @@ public class NativeWhisperPlugin extends Plugin {
                 conn.setInstanceFollowRedirects(true);
                 conn.setConnectTimeout(20000);
                 conn.setReadTimeout(60000);
-                conn.setRequestProperty("User-Agent", "AssistantPV-Carnet/3.1");
+                conn.setRequestProperty("User-Agent", "AssistantPV-Carnet/3.2");
                 conn.connect();
                 int code = conn.getResponseCode();
                 if (code < 200 || code >= 300) throw new Exception("Serveur modèle HTTP " + code);

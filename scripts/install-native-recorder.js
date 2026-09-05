@@ -47,6 +47,7 @@ import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.util.Base64;
 
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
@@ -62,7 +63,9 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.OutputStream;
 import java.io.RandomAccessFile;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 
 @CapacitorPlugin(
     name = "NativeAudioRecorder",
@@ -81,6 +84,9 @@ public class NativeAudioRecorderPlugin extends Plugin {
     private FileOutputStream wavOut;
     private volatile boolean recording = false;
     private volatile long pcmBytes = 0L;
+    private volatile boolean pcmStreamingRequested = false;
+    private final ArrayDeque<String> pcmChunkQueue = new ArrayDeque<>();
+    private static final int MAX_PCM_QUEUE = 28;
     private long startedAt = 0L;
 
     private SpeechRecognizer speechRecognizer;
@@ -106,6 +112,8 @@ public class NativeAudioRecorderPlugin extends Plugin {
         ret.put("speechRecognizerAvailable", SpeechRecognizer.isRecognitionAvailable(getContext()));
         ret.put("onDeviceRecognizerAvailable", Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && SpeechRecognizer.isOnDeviceRecognitionAvailable(getContext()));
         ret.put("liveTranscriptionSupported", SpeechRecognizer.isRecognitionAvailable(getContext()));
+        ret.put("pcmStreamingSupported", true);
+        ret.put("sampleRate", SAMPLE_RATE);
         call.resolve(ret);
     }
 
@@ -139,6 +147,8 @@ public class NativeAudioRecorderPlugin extends Plugin {
         speechLanguage = call.getString("language", "mg-MG");
         speechPreferOffline = Boolean.TRUE.equals(call.getBoolean("preferOffline", false));
         speechBiasingText = call.getString("biasingText", "");
+        pcmStreamingRequested = Boolean.TRUE.equals(call.getBoolean("streamPcm", false));
+        synchronized (pcmChunkQueue) { pcmChunkQueue.clear(); }
 
         try {
             File dir = new File(getContext().getFilesDir(), "audios");
@@ -315,10 +325,31 @@ public class NativeAudioRecorderPlugin extends Plugin {
                         pcmBytes += read;
                     }
                 }
+                if (pcmStreamingRequested) {
+                    byte[] piece = Arrays.copyOf(buffer, read);
+                    String encoded = Base64.encodeToString(piece, Base64.NO_WRAP);
+                    synchronized (pcmChunkQueue) {
+                        while (pcmChunkQueue.size() >= MAX_PCM_QUEUE) pcmChunkQueue.pollFirst();
+                        pcmChunkQueue.addLast(encoded);
+                    }
+                }
             }
         } catch (Exception error) {
             if (recording) transcriptionError = "Capture audio interrompue : " + safeMessage(error);
         }
+    }
+
+
+    @PluginMethod
+    public void drainPcmChunks(PluginCall call) {
+        JSArray chunks = new JSArray();
+        synchronized (pcmChunkQueue) {
+            while (!pcmChunkQueue.isEmpty()) chunks.put(pcmChunkQueue.pollFirst());
+        }
+        JSObject ret = new JSObject();
+        ret.put("chunks", chunks);
+        ret.put("sampleRate", SAMPLE_RATE);
+        call.resolve(ret);
     }
 
     @PluginMethod
@@ -343,6 +374,7 @@ public class NativeAudioRecorderPlugin extends Plugin {
         long duration = Math.max(0L, System.currentTimeMillis() - startedAt);
         try {
             recording = false;
+            pcmStreamingRequested = false;
             new Handler(Looper.getMainLooper()).post(() -> {
                 if (speechRecognizer != null) {
                     try { speechRecognizer.stopListening(); } catch (Exception ignored) {}
@@ -423,6 +455,8 @@ public class NativeAudioRecorderPlugin extends Plugin {
     @PluginMethod
     public void cancelRecording(PluginCall call) {
         recording = false;
+        pcmStreamingRequested = false;
+        synchronized (pcmChunkQueue) { pcmChunkQueue.clear(); }
         try { if (audioRecord != null) audioRecord.stop(); } catch (Exception ignored) {}
         if (captureThread != null) {
             try { captureThread.join(500); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
@@ -639,5 +673,5 @@ public class MainActivity extends BridgeActivity {
 `;
 fs.writeFileSync(mainActivity, activitySource);
 
-console.log('Enregistreur Android natif v3.1 beta.3 intégré :', pluginFile);
-console.log('Audio WAV immédiat + SpeechRecognizer direct en parallèle + export différé des données audio.');
+console.log('Enregistreur Android natif v3.2 beta.1 intégré :', pluginFile);
+console.log('Audio WAV + dictée Android + flux PCM optionnel pour transcription en ligne sécurisée.');

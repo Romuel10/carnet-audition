@@ -1,5 +1,5 @@
 (() => {
-  const APP_VERSION = '3.1.0-beta.3';
+  const APP_VERSION = '3.2.0-beta.1';
   const STORAGE_KEY = 'assistant-pv-carnet-draft-v1';
   const PROFILE_KEY = 'assistant-pv-carnet-investigator-profile-v1';
   const AI_SETTINGS_KEY = 'assistant-pv-carnet-ai-settings-v1';
@@ -50,6 +50,7 @@ Madagasikara`;
         stopRecording: call('stopRecording'),
         cancelRecording: call('cancelRecording'),
         getTranscriptionState: call('getTranscriptionState'),
+        drainPcmChunks: call('drainPcmChunks'),
         readAudioFile: call('readAudioFile'),
         deleteAudioFile: call('deleteAudioFile'),
         saveAuditionFile: call('saveAuditionFile'),
@@ -74,7 +75,7 @@ Madagasikara`;
 
   const NativeAudioRecorder = resolveNativeAudioRecorder();
   const NativeWhisper = resolveNativeWhisper();
-  const state = { exchanges: [], activeRecording: null, stream: null, saveTimer: null, profile: null, whisperPoll: null };
+  const state = { exchanges: [], activeRecording: null, stream: null, saveTimer: null, profile: null, whisperPoll: null, lastCloudCheck: null };
   const $ = (s, root = document) => root.querySelector(s);
   const $$ = (s, root = document) => [...root.querySelectorAll(s)];
   const uid = () => globalThis.crypto?.randomUUID?.() || `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -113,54 +114,148 @@ Madagasikara`;
     $('#downloadWhisperBtn')?.addEventListener('click', downloadWhisperModel);
     $('#deleteWhisperBtn')?.addEventListener('click', deleteWhisperModel);
     $('#whisperModel')?.addEventListener('change', () => refreshWhisperStatus().catch(() => {}));
-    $('#speechEngine')?.addEventListener('change', applySpeechEnginePreset);
+    $('#testCloudBtn')?.addEventListener('click', testCloudConnection);
+    $$('input[name="speechModeChoice"]').forEach(input => input.addEventListener('change', () => {
+      syncSpeechModeUi();
+      persistAiSettings();
+      scheduleSave();
+    }));
+  }
+
+  function getSpeechMode() {
+    return $('input[name="speechModeChoice"]:checked')?.value || 'cloud';
+  }
+
+  function setSpeechMode(mode) {
+    const safe = ['cloud','android','private'].includes(mode) ? mode : 'cloud';
+    const input = $(`input[name="speechModeChoice"][value="${safe}"]`);
+    if (input) input.checked = true;
+    syncSpeechModeUi();
+  }
+
+  function syncSpeechModeUi() {
+    const mode = getSpeechMode();
+    const cloudSetup = $('#cloudSetup');
+    if (cloudSetup) cloudSetup.hidden = mode !== 'cloud';
+    if (mode === 'cloud') {
+      $('#speechEngine').value = 'smart';
+      $('#autoTranscription').checked = true;
+      $('#localSpeechOnly').checked = false;
+      $('#aiReviewAfterStop').checked = false;
+      updateCloudStatus(cloudConfigured() ? 'Prêt à tester' : 'À configurer', cloudConfigured() ? 'is-neutral' : 'is-neutral');
+    } else if (mode === 'android') {
+      $('#speechEngine').value = 'live';
+      $('#autoTranscription').checked = true;
+      $('#localSpeechOnly').checked = false;
+      $('#aiReviewAfterStop').checked = false;
+      updateCloudStatus('Mode Android', 'is-neutral');
+    } else {
+      $('#speechEngine').value = 'offline';
+      $('#autoTranscription').checked = false;
+      $('#localSpeechOnly').checked = true;
+      $('#aiReviewAfterStop').checked = true;
+      updateCloudStatus('Mode local', 'is-neutral');
+    }
   }
 
   function initAiSettings() {
     let cfg = null;
     try { cfg = JSON.parse(localStorage.getItem(AI_SETTINGS_KEY) || 'null'); } catch (_) { cfg = null; }
-    const migrated = Number(cfg?.settingsVersion || 0) < 3;
+    const migrated = Number(cfg?.settingsVersion || 0) < 4;
     if (!$('#speechDictionary').value.trim()) $('#speechDictionary').value = cfg?.dictionary || DEFAULT_DICTIONARY;
-    if (cfg?.engine && $('#speechEngine')) $('#speechEngine').value = cfg.engine;
     if (cfg?.model && $('#whisperModel')) $('#whisperModel').value = cfg.model;
-    // Beta.3 privilégie la réactivité : Whisper n'est plus lancé automatiquement après chaque arrêt.
     $('#aiReviewAfterStop').checked = migrated ? false : Boolean(cfg?.aiReviewAfterStop);
     if (cfg?.keepLiveAlternative !== undefined) $('#keepLiveAlternative').checked = Boolean(cfg.keepLiveAlternative);
     if (cfg?.learnFromCorrections !== undefined) $('#learnFromCorrections').checked = Boolean(cfg.learnFromCorrections);
+    if ($('#onlineRelayUrl')) $('#onlineRelayUrl').value = cfg?.relayUrl || '';
+    if ($('#onlineRelayToken')) $('#onlineRelayToken').value = cfg?.relayToken || '';
+    if ($('#microProfile')) $('#microProfile').value = cfg?.microProfile || 'near_field';
+    const oldEngine = cfg?.engine || $('#speechEngine')?.value || 'smart';
+    const preferredMode = cfg?.speechMode || (oldEngine === 'offline' ? 'private' : oldEngine === 'live' ? 'android' : 'cloud');
+    setSpeechMode(migrated ? 'cloud' : preferredMode);
     if (migrated) persistAiSettings();
-    ['speechEngine','whisperModel','speechDictionary','aiReviewAfterStop','keepLiveAlternative','learnFromCorrections'].forEach(id => $(`#${id}`)?.addEventListener('change', persistAiSettings));
+    ['whisperModel','speechDictionary','aiReviewAfterStop','keepLiveAlternative','learnFromCorrections','onlineRelayUrl','onlineRelayToken','microProfile','autoTranscription','localSpeechOnly'].forEach(id => {
+      $(`#${id}`)?.addEventListener('change', () => { persistAiSettings(); syncSpeechModeUi(); });
+    });
     $('#speechDictionary')?.addEventListener('input', persistAiSettings);
+    $('#onlineRelayUrl')?.addEventListener('input', () => { persistAiSettings(); updateCloudStatus(cloudConfigured() ? 'Prêt à tester' : 'À configurer', 'is-neutral'); });
+    $('#onlineRelayToken')?.addEventListener('input', persistAiSettings);
   }
 
   function persistAiSettings() {
     const next = {
-      settingsVersion: 3,
+      settingsVersion: 4,
+      speechMode: getSpeechMode(),
       engine: $('#speechEngine')?.value || 'smart',
       model: $('#whisperModel')?.value || 'base-q5_1',
       dictionary: $('#speechDictionary')?.value || DEFAULT_DICTIONARY,
-      aiReviewAfterStop: $('#aiReviewAfterStop')?.checked !== false,
+      aiReviewAfterStop: $('#aiReviewAfterStop')?.checked === true,
       keepLiveAlternative: $('#keepLiveAlternative')?.checked !== false,
       learnFromCorrections: $('#learnFromCorrections')?.checked !== false,
+      relayUrl: $('#onlineRelayUrl')?.value?.trim() || '',
+      relayToken: $('#onlineRelayToken')?.value || '',
+      microProfile: $('#microProfile')?.value || 'near_field',
     };
     localStorage.setItem(AI_SETTINGS_KEY, JSON.stringify(next));
   }
 
-  function applySpeechEnginePreset() {
-    const mode = $('#speechEngine').value;
-    if (mode === 'smart') {
-      $('#autoTranscription').checked = true;
-      $('#localSpeechOnly').checked = false;
-      $('#aiReviewAfterStop').checked = false;
-    } else if (mode === 'live') {
-      $('#autoTranscription').checked = true;
-      $('#localSpeechOnly').checked = false;
-      $('#aiReviewAfterStop').checked = false;
-    } else if (mode === 'offline') {
-      $('#autoTranscription').checked = false;
-      $('#localSpeechOnly').checked = true;
-      $('#aiReviewAfterStop').checked = true;
+  function normalizeRelayUrl(value) {
+    let url = String(value || '').trim();
+    if (!url) return '';
+    if (/^https?:\/\//i.test(url)) url = url.replace(/^http/i, 'ws');
+    if (!/^wss?:\/\//i.test(url)) url = `wss://${url}`;
+    return url;
+  }
+
+  function cloudConfigured() {
+    return Boolean(normalizeRelayUrl($('#onlineRelayUrl')?.value));
+  }
+
+  function updateCloudStatus(text, className = 'is-neutral') {
+    const el = $('#cloudStatus');
+    if (!el) return;
+    el.textContent = text;
+    el.className = `connection-pill ${className}`;
+  }
+
+  function buildCloudPrompt() {
+    const words = ($('#speechDictionary')?.value || '').split(/\n+/).map(x => x.trim()).filter(Boolean).slice(0, 100);
+    const lang = ($('#speechLanguage')?.value || 'mg-MG').startsWith('fr') ? 'français' : 'malagasy de Madagascar';
+    return `Transcription fidèle d'une audition de gendarmerie. Langue principale : ${lang}. Conserver les noms propres et les termes juridiques tels qu'ils sont prononcés. Vocabulaire métier fourni par l'utilisateur : ${words.join(', ')}`.slice(0, 1800);
+  }
+
+  async function testCloudConnection() {
+    if (!cloudConfigured()) return toast('Renseignez d’abord l’adresse du relais sécurisé.');
+    const btn = $('#testCloudBtn');
+    btn.disabled = true;
+    updateCloudStatus('Connexion…', 'is-connecting');
+    let ws;
+    try {
+      await new Promise((resolve, reject) => {
+        let done = false;
+        const timer = setTimeout(() => { if (!done) { done = true; try { ws?.close(); } catch (_) {} reject(new Error('Délai de connexion dépassé')); } }, 6000);
+        ws = new WebSocket(normalizeRelayUrl($('#onlineRelayUrl').value));
+        ws.onopen = () => ws.send(JSON.stringify({ type: 'ping', token: $('#onlineRelayToken')?.value || '' }));
+        ws.onerror = () => { if (!done) { done = true; clearTimeout(timer); reject(new Error('Connexion impossible')); } };
+        ws.onmessage = event => {
+          let msg = null; try { msg = JSON.parse(event.data); } catch (_) {}
+          if (msg?.type === 'pong' || msg?.type === 'ready') {
+            if (!done) { done = true; clearTimeout(timer); resolve(); }
+          } else if (msg?.type === 'error') {
+            if (!done) { done = true; clearTimeout(timer); reject(new Error(msg.message || 'Relais refusé')); }
+          }
+        };
+      });
+      state.lastCloudCheck = Date.now();
+      updateCloudStatus('Connexion sécurisée', 'is-online');
+      toast('Service de transcription en ligne accessible.');
+    } catch (error) {
+      updateCloudStatus('Connexion impossible', 'is-error');
+      toast(error?.message || 'Service en ligne indisponible.');
+    } finally {
+      try { ws?.close(); } catch (_) {}
+      btn.disabled = false;
     }
-    scheduleSave();
   }
 
   function buildBiasingText() {
@@ -183,8 +278,8 @@ Madagasikara`;
     const bar = $('#whisperProgress');
     if (!label || !details || !bar) return;
     if (!isNativeAndroid || !NativeWhisper) {
-      label.textContent = 'Whisper local disponible uniquement dans l’APK Android';
-      details.textContent = 'La version navigateur garde la transcription du moteur du téléphone.';
+      label.textContent = 'Modèle local disponible uniquement dans l’APK Android';
+      details.textContent = 'La version navigateur utilise la dictée disponible sur l’appareil.';
       bar.style.width = '0%';
       return;
     }
@@ -192,37 +287,37 @@ Madagasikara`;
     try {
       const st = await NativeWhisper.modelStatus({ modelId });
       if (st.downloading) {
-        label.textContent = `Téléchargement du modèle IA… ${Number(st.progress || 0)} %`;
+        label.textContent = `Téléchargement du modèle local… ${Number(st.progress || 0)} %`;
         details.textContent = modelId === 'small-q5_1' ? 'Modèle Small Q5 (~181 MiB)' : 'Modèle Base Q5 (~57 MiB)';
         bar.style.width = `${Math.max(2, Number(st.progress || 0))}%`;
       } else if (st.installed) {
-        label.textContent = 'Modèle IA local prêt ✓';
+        label.textContent = 'Modèle local prêt';
         details.textContent = `${modelId} • ${(Number(st.sizeBytes || 0)/1024/1024).toFixed(1)} Mo • transcription hors ligne`;
         bar.style.width = '100%';
       } else {
-        label.textContent = 'Modèle IA local non installé';
+        label.textContent = 'Modèle local non installé';
         details.textContent = modelId === 'small-q5_1' ? 'Small Q5 : plus précis, plus lourd (~181 MiB).' : 'Base Q5 : recommandé pour votre téléphone (~57 MiB).';
         bar.style.width = '0%';
       }
       $('#deleteWhisperBtn').disabled = !st.installed;
     } catch (error) {
-      label.textContent = 'Diagnostic Whisper impossible';
+      label.textContent = 'Diagnostic du modèle local impossible';
       details.textContent = error?.message || String(error);
       bar.style.width = '0%';
     }
   }
 
   async function downloadWhisperModel() {
-    if (!NativeWhisper) return toast('Moteur Whisper natif indisponible dans cet APK.');
+    if (!NativeWhisper) return toast('Moteur local indisponible dans cet APK.');
     const modelId = $('#whisperModel').value || 'base-q5_1';
     const btn = $('#downloadWhisperBtn');
     btn.disabled = true;
     clearInterval(state.whisperPoll);
     state.whisperPoll = setInterval(() => refreshWhisperStatus().catch(() => {}), 700);
     try {
-      toast('Téléchargement du modèle IA démarré. Gardez l’application ouverte.');
+      toast('Téléchargement du modèle local démarré. Gardez l’application ouverte.');
       await NativeWhisper.downloadModel({ modelId });
-      toast('Modèle IA local installé.');
+      toast('Modèle local installé.');
     } catch (error) {
       toast(error?.message || 'Téléchargement du modèle impossible.');
     } finally {
@@ -235,11 +330,11 @@ Madagasikara`;
 
   async function deleteWhisperModel() {
     if (!NativeWhisper) return;
-    if (!confirm('Supprimer le modèle IA local de ce téléphone ?')) return;
+    if (!confirm('Supprimer le modèle local de ce téléphone ?')) return;
     const modelId = $('#whisperModel').value || 'base-q5_1';
     try {
       await NativeWhisper.deleteModel({ modelId });
-      toast('Modèle IA supprimé.');
+      toast('Modèle local supprimé.');
       await refreshWhisperStatus();
     } catch (error) { toast(error?.message || 'Suppression impossible.'); }
   }
@@ -362,6 +457,9 @@ Madagasikara`;
       questionAiTranscript: overrides.questionAiTranscript || '', answerAiTranscript: overrides.answerAiTranscript || '',
       questionAiModel: overrides.questionAiModel || '', answerAiModel: overrides.answerAiModel || '',
       questionAiElapsedMs: Number(overrides.questionAiElapsedMs || 0), answerAiElapsedMs: Number(overrides.answerAiElapsedMs || 0),
+      questionCloudTranscript: overrides.questionCloudTranscript || '', answerCloudTranscript: overrides.answerCloudTranscript || '',
+      questionCloudModel: overrides.questionCloudModel || '', answerCloudModel: overrides.answerCloudModel || '',
+      questionCloudLatencyMs: Number(overrides.questionCloudLatencyMs || 0), answerCloudLatencyMs: Number(overrides.answerCloudLatencyMs || 0),
     };
   }
 
@@ -436,30 +534,169 @@ Madagasikara`;
 
   async function startRecording(exchange, kind, card) {
     if (NativeAudioRecorder) return startNativeRecording(exchange, kind, card);
-    if (isNativeAndroid) throw new Error('Pont audio natif indisponible. Réinstallez la v3.1 beta.3 puis relancez l’application.');
+    if (isNativeAndroid) throw new Error('Pont audio natif indisponible. Réinstallez la v3.2 beta.1 puis relancez l’application.');
     return startWebRecording(exchange, kind, card);
   }
 
   async function startNativeRecording(exchange, kind, card) {
     const button = $(`.${kind}-record`, card);
     const status = $(`.${kind}-status`, card);
-    const engineMode = $('#speechEngine')?.value || 'smart';
-    const transcribe = $('#autoTranscription').checked && engineMode !== 'offline';
+    const badge = $(`.${kind}-live-badge`, card);
+    const mode = getSpeechMode();
+    const useCloud = mode === 'cloud' && cloudConfigured();
+    const transcribe = $('#autoTranscription').checked && mode !== 'private';
     const language = $('#speechLanguage').value || 'mg-MG';
-    const preferOffline = $('#localSpeechOnly').checked;
+    const preferOffline = mode === 'android' && $('#localSpeechOnly').checked;
     const baseText = (kind === 'question' ? exchange.question : exchange.answer).trim();
-    status.textContent = transcribe ? 'Ouverture du micro + transcription…' : 'Ouverture du microphone…';
-    const started = await NativeAudioRecorder.startRecording({ language, transcribe, preferOffline, biasingText: buildBiasingText() });
+    status.textContent = useCloud ? 'Ouverture du microphone et connexion sécurisée…' : transcribe ? 'Ouverture du microphone et de la dictée…' : 'Ouverture du microphone…';
+    const started = await NativeAudioRecorder.startRecording({ language, transcribe, preferOffline, biasingText: buildBiasingText(), streamPcm: useCloud });
     if (started?.value === false) throw new Error('Le microphone n’a pas démarré.');
     button.classList.add('recording');
     $('.record-label', button).textContent = 'Arrêter';
-    status.textContent = transcribe ? 'Audio + transcription en direct…' : 'Enregistrement audio en cours…';
-    const active = { exchangeId: exchange.id, kind, native: true, card, startedAt: Date.now(), baseText, pollTimer: null };
+    if (badge) { badge.hidden = !transcribe; badge.textContent = useCloud ? 'Texte provisoire' : 'Dictée en direct'; }
+    status.textContent = useCloud ? 'Audio en cours • dictée immédiate • connexion au service en ligne…' : transcribe ? 'Audio et dictée en direct…' : 'Enregistrement audio en cours…';
+    const active = {
+      exchangeId: exchange.id, kind, native: true, card, startedAt: Date.now(), baseText,
+      pollTimer: null, pcmTimer: null, androidText: '', cloudText: '', cloudFinalText: '',
+      cloudHasText: false, cloudPending: [], cloudSocket: null, cloudReady: false, cloudStopped: false,
+      cloudFinalPromise: null, cloudFinalResolve: null, cloudConnectStartedAt: Date.now()
+    };
     state.activeRecording = active;
     if (transcribe && NativeAudioRecorder.getTranscriptionState) {
-      active.pollTimer = setInterval(() => pollNativeTranscript(active).catch(() => {}), 250);
+      active.pollTimer = setInterval(() => pollNativeTranscript(active).catch(() => {}), 220);
       pollNativeTranscript(active).catch(() => {});
     }
+    if (useCloud) {
+      active.cloudFinalPromise = new Promise(resolve => { active.cloudFinalResolve = resolve; });
+      startCloudTranscription(active).catch(error => {
+        console.warn('Cloud transcription unavailable', error);
+        updateCloudStatus('Secours Android', 'is-error');
+        status.textContent = 'Audio en cours • service en ligne indisponible • dictée Android de secours';
+      });
+      if (NativeAudioRecorder.drainPcmChunks) {
+        active.pcmTimer = setInterval(() => drainNativePcm(active).catch(() => {}), 180);
+      }
+    } else if (mode === 'cloud') {
+      updateCloudStatus('À configurer', 'is-neutral');
+      status.textContent = 'Audio en cours • relais en ligne non configuré • dictée Android de secours';
+    }
+  }
+
+  async function startCloudTranscription(active) {
+    const url = normalizeRelayUrl($('#onlineRelayUrl')?.value);
+    if (!url) throw new Error('Adresse du relais manquante.');
+    updateCloudStatus('Connexion…', 'is-connecting');
+    const ws = new WebSocket(url);
+    active.cloudSocket = ws;
+    const connectTimeout = setTimeout(() => {
+      if (!active.cloudReady) try { ws.close(); } catch (_) {}
+    }, 6500);
+    ws.onopen = () => {
+      ws.send(JSON.stringify({
+        type: 'init',
+        token: $('#onlineRelayToken')?.value || '',
+        language: ($('#speechLanguage')?.value || 'mg-MG').toLowerCase().startsWith('fr') ? 'fr' : 'mg',
+        prompt: buildCloudPrompt(),
+        microProfile: $('#microProfile')?.value || 'near_field',
+        appVersion: APP_VERSION,
+      }));
+    };
+    ws.onmessage = event => {
+      let msg = null;
+      try { msg = JSON.parse(event.data); } catch (_) { return; }
+      handleCloudMessage(active, msg);
+    };
+    ws.onerror = () => {
+      if (!active.cloudReady) updateCloudStatus('Connexion impossible', 'is-error');
+    };
+    ws.onclose = () => {
+      clearTimeout(connectTimeout);
+      if (!active.cloudFinalText && !active.cloudStopped) updateCloudStatus('Secours Android', 'is-error');
+    };
+  }
+
+  function handleCloudMessage(active, msg) {
+    const exchange = state.exchanges.find(x => x.id === active.exchangeId);
+    const card = active.card;
+    if (!exchange || !card || !msg) return;
+    const textarea = $(`.${active.kind}-text`, card);
+    const status = $(`.${active.kind}-status`, card);
+    const quality = $(`.${active.kind}-cloud-quality`, card);
+    const badge = $(`.${active.kind}-live-badge`, card);
+    if (msg.type === 'ready') {
+      active.cloudReady = true;
+      updateCloudStatus('En ligne', 'is-online');
+      if (badge) { badge.hidden = false; badge.textContent = 'Transcription en ligne'; }
+      for (const chunk of active.cloudPending.splice(0)) sendCloudChunk(active, chunk);
+      return;
+    }
+    if (msg.type === 'partial' || msg.type === 'final') {
+      const text = String(msg.text || '').trim();
+      if (!text) return;
+      active.cloudHasText = true;
+      active.cloudText = text;
+      if (msg.type === 'final') active.cloudFinalText = text;
+      const value = [active.baseText, text].filter(Boolean).join(active.baseText ? ' ' : '').trim();
+      textarea.value = value;
+      if (active.kind === 'question') exchange.question = value; else exchange.answer = value;
+      exchange[`${active.kind}CloudTranscript`] = text;
+      exchange[`${active.kind}CloudModel`] = String(msg.model || 'online-transcription');
+      exchange[`${active.kind}CloudLatencyMs`] = Number(msg.latencyMs || 0);
+      if (quality) quality.textContent = msg.type === 'final' ? 'Texte finalisé en ligne' : 'Correction en ligne en cours';
+      if (badge) { badge.hidden = false; badge.textContent = msg.type === 'final' ? 'Texte final' : 'Transcription en ligne'; }
+      status.textContent = msg.type === 'final' ? 'Audio conservé • transcription en ligne finalisée' : 'Audio en cours • texte corrigé en ligne';
+      scheduleSave();
+      if (msg.type === 'final') {
+        updateCloudStatus('En ligne', 'is-online');
+        active.cloudFinalResolve?.(text);
+        active.cloudFinalResolve = null;
+        setTimeout(() => { try { active.cloudSocket?.close(); } catch (_) {} }, 350);
+      }
+      return;
+    }
+    if (msg.type === 'status' && msg.value === 'finalizing') {
+      status.textContent = 'Audio conservé • finalisation de la transcription en ligne…';
+      return;
+    }
+    if (msg.type === 'error') {
+      const message = String(msg.message || 'service en ligne indisponible');
+      if (quality) quality.textContent = 'Secours Android actif';
+      status.textContent = `Audio en cours • ${message} • dictée Android de secours`;
+      updateCloudStatus('Secours Android', 'is-error');
+      active.cloudFinalResolve?.('');
+      active.cloudFinalResolve = null;
+    }
+  }
+
+  async function drainNativePcm(active) {
+    if (!NativeAudioRecorder?.drainPcmChunks) return;
+    const data = await NativeAudioRecorder.drainPcmChunks();
+    const chunks = Array.isArray(data?.chunks) ? data.chunks : [];
+    for (const chunk of chunks) {
+      if (!chunk) continue;
+      if (active.cloudReady && active.cloudSocket?.readyState === WebSocket.OPEN) sendCloudChunk(active, chunk);
+      else {
+        active.cloudPending.push(chunk);
+        if (active.cloudPending.length > 18) active.cloudPending.shift();
+      }
+    }
+  }
+
+  function sendCloudChunk(active, chunk) {
+    try {
+      if (active.cloudSocket?.readyState === WebSocket.OPEN) active.cloudSocket.send(JSON.stringify({ type: 'audio', audio: chunk }));
+    } catch (_) {}
+  }
+
+  async function stopCloudTranscription(active) {
+    if (!active?.cloudSocket) return '';
+    try { await drainNativePcm(active); } catch (_) {}
+    active.cloudStopped = true;
+    try {
+      if (active.cloudSocket.readyState === WebSocket.OPEN) active.cloudSocket.send(JSON.stringify({ type: 'stop' }));
+    } catch (_) {}
+    if (!active.cloudFinalPromise) return active.cloudFinalText || '';
+    return Promise.race([active.cloudFinalPromise, sleep(1400).then(() => active.cloudFinalText || '')]);
   }
 
   async function pollNativeTranscript(active, finalPass = false) {
@@ -470,22 +707,25 @@ Madagasikara`;
     const card = active.card;
     if (!exchange || !card) return;
     const text = String(data.text || '').trim();
-    if (text) {
-      const value = [active.baseText, text].filter(Boolean).join(active.baseText ? ' ' : '');
+    active.androidText = text || active.androidText;
+    if (text && !active.cloudHasText) {
+      const value = [active.baseText, text].filter(Boolean).join(active.baseText ? ' ' : '').trim();
       const textarea = $(`.${active.kind}-text`, card);
       textarea.value = value;
       if (active.kind === 'question') exchange.question = value; else exchange.answer = value;
       scheduleSave();
     }
     const status = $(`.${active.kind}-status`, card);
+    const badge = $(`.${active.kind}-live-badge`, card);
     const s = String(data.status || '');
-    if (!finalPass && s === 'listening') {
+    if (!finalPass && s === 'listening' && !active.cloudHasText) {
       const confidence = Number(data.confidence ?? -1);
       const confText = confidence >= 0 ? ` • confiance ${Math.round(confidence*100)}%` : '';
-      status.textContent = text ? `Audio + texte en direct…${confText}` : 'Audio en cours • écoute de la parole…';
+      status.textContent = text ? `Audio en cours • texte provisoire${confText}` : 'Audio en cours • écoute de la parole…';
+      if (badge) { badge.hidden = false; badge.textContent = 'Texte provisoire'; }
     }
-    if (!finalPass && s === 'unsupported') status.textContent = 'Audio en cours • transcription non prise en charge par ce moteur Android';
-    if (!finalPass && s === 'error') status.textContent = `Audio en cours • transcription indisponible${data.errorMessage ? ` (${data.errorMessage})` : ''}`;
+    if (!finalPass && s === 'unsupported' && !active.cloudReady) status.textContent = 'Audio en cours • dictée Android indisponible';
+    if (!finalPass && s === 'error' && !active.cloudReady) status.textContent = `Audio en cours • dictée Android indisponible${data.errorMessage ? ` (${data.errorMessage})` : ''}`;
   }
 
   async function stopNativeRecording(active) {
@@ -493,10 +733,13 @@ Madagasikara`;
     const exchange = state.exchanges.find(x => x.id === exchangeId);
     const button = $(`.${kind}-record`, card);
     const status = $(`.${kind}-status`, card);
+    const badge = $(`.${kind}-live-badge`, card);
     if (active.pollTimer) clearInterval(active.pollTimer);
+    if (active.pcmTimer) clearInterval(active.pcmTimer);
     try {
-      status.textContent = 'Enregistrement terminé • sauvegarde…';
+      status.textContent = 'Arrêt de l’enregistrement…';
       const result = await NativeAudioRecorder.stopRecording();
+      try { await drainNativePcm(active); } catch (_) {}
       const data = result?.value || result || {};
       const audioPath = String(data.path || '');
       if (!audioPath) throw new Error('Le fichier audio n’a pas été créé.');
@@ -514,19 +757,28 @@ Madagasikara`;
       player.src = CapacitorRuntime?.convertFileSrc ? CapacitorRuntime.convertFileSrc(audioPath) : audioPath;
       player.hidden = false;
       try { await pollNativeTranscript(active, true); } catch (_) {}
+      exchange[`${kind}LiveTranscript`] = active.androidText || '';
+      const cloudFinal = await stopCloudTranscription(active);
       const textarea = $(`.${kind}-text`, card);
       const liveText = textarea.value.trim();
-      exchange[`${kind}LiveTranscript`] = liveText;
-      status.textContent = liveText ? `Audio + texte conservés • ${formatDuration(durationMs)}` : `Audio conservé • ${formatDuration(durationMs)} • texte direct indisponible`;
+      if (cloudFinal) {
+        status.textContent = `Audio + texte en ligne conservés • ${formatDuration(durationMs)}`;
+        if (badge) { badge.hidden = false; badge.textContent = 'Texte final'; }
+      } else if (active.cloudSocket && !active.cloudFinalText) {
+        status.textContent = `Audio conservé • ${formatDuration(durationMs)} • finalisation en ligne en arrière-plan`;
+      } else {
+        status.textContent = liveText ? `Audio + texte conservés • ${formatDuration(durationMs)}` : `Audio conservé • ${formatDuration(durationMs)} • texte indisponible`;
+      }
       saveDraft();
       await maybeReviewWithWhisper({ active, exchange, kind, card, status, audioPath, durationMs, liveText });
     } catch (error) {
       console.error(error);
       status.textContent = 'Échec de l’enregistrement.';
       toast(error?.message || 'L’audio n’a pas pu être conservé.');
+      try { active.cloudSocket?.close(); } catch (_) {}
     } finally {
       button.classList.remove('recording');
-      $('.record-label', button).textContent = kind === 'question' ? 'Question' : 'Réponse';
+      $('.record-label', button).textContent = kind === 'question' ? 'Enregistrer la question' : 'Enregistrer la réponse';
       state.activeRecording = null;
     }
   }
@@ -538,16 +790,16 @@ Madagasikara`;
     let modelState = null;
     try { modelState = await NativeWhisper.modelStatus({ modelId }); } catch (_) {}
     if (!modelState?.installed) {
-      status.textContent = `Audio + texte conservés • ${formatDuration(durationMs)} • modèle IA non installé`;
+      status.textContent = `Audio + texte conservés • ${formatDuration(durationMs)} • modèle local non installé`;
       return;
     }
     status.classList.add('ai-processing');
-    status.textContent = `Audio conservé • révision IA Malagasy en cours…`;
+    status.textContent = `Audio conservé • révision locale en cours…`;
     try {
       const language = ($('#speechLanguage').value || 'mg-MG').toLowerCase().startsWith('fr') ? 'fr' : 'mg';
       const ai = await NativeWhisper.transcribe({ audioPath, modelId, language, prompt: buildWhisperPrompt() });
       const aiText = String(ai?.text || '').trim();
-      if (!aiText) throw new Error('Whisper n’a produit aucun texte.');
+      if (!aiText) throw new Error('Le modèle local n’a produit aucun texte.');
       exchange[`${kind}AiTranscript`] = aiText;
       exchange[`${kind}AiModel`] = modelId;
       exchange[`${kind}AiElapsedMs`] = Number(ai?.elapsedMs || 0);
@@ -555,12 +807,12 @@ Madagasikara`;
       const textarea = $(`.${kind}-text`, card);
       textarea.value = finalText;
       if (kind === 'question') exchange.question = finalText; else exchange.answer = finalText;
-      status.textContent = `Audio + texte IA conservés • ${formatDuration(durationMs)} • IA ${(Number(ai?.elapsedMs || 0)/1000).toFixed(1)} s`;
+      status.textContent = `Audio + texte local conservés • ${formatDuration(durationMs)} • ${(Number(ai?.elapsedMs || 0)/1000).toFixed(1)} s`;
       saveDraft();
     } catch (error) {
       console.warn('Whisper review failed', error);
-      status.textContent = `Audio + texte direct conservés • ${formatDuration(durationMs)} • révision IA indisponible`;
-      if (!liveText) toast(error?.message || 'Révision IA indisponible.');
+      status.textContent = `Audio + texte direct conservés • ${formatDuration(durationMs)} • révision locale indisponible`;
+      if (!liveText) toast(error?.message || 'Révision locale indisponible.');
     } finally {
       status.classList.remove('ai-processing');
     }
@@ -626,7 +878,7 @@ Madagasikara`;
         exchange[`${kind}MimeType`] = blob.type;
         status.textContent = `Audio + texte conservés • ${formatDuration(durationMs)}`;
         button.classList.remove('recording');
-        $('.record-label', button).textContent = kind === 'question' ? 'Question' : 'Réponse';
+        $('.record-label', button).textContent = kind === 'question' ? 'Enregistrer la question' : 'Enregistrer la réponse';
         const player = $(`.${kind}-player`, card);
         player.src = URL.createObjectURL(blob);
         player.hidden = false;
@@ -661,17 +913,17 @@ Madagasikara`;
   async function runNativeDiagnostics() {
     const el = $('#exportStatus');
     if (!NativeAudioRecorder) {
-      el.textContent = 'ERREUR : pont audio natif indisponible. Vérifiez que la v3.1 beta.3 est bien installée.';
+      el.textContent = 'ERREUR : pont audio natif indisponible. Vérifiez que la v3.2 beta.1 est bien installée.';
       return;
     }
     try {
       const d = await NativeAudioRecorder.diagnostics();
       const speech = d.liveTranscriptionSupported ? 'transcription live prête' : 'transcription live selon moteur Android';
-      let whisper = 'Whisper non vérifié';
+      let whisper = 'modèle local non vérifié';
       try {
         if (NativeWhisper) {
           const ws = await NativeWhisper.modelStatus({ modelId: $('#whisperModel')?.value || 'base-q5_1' });
-          whisper = ws.installed ? 'Whisper local prêt' : 'Whisper à télécharger';
+          whisper = ws.installed ? 'modèle local prêt' : 'modèle local à installer';
         }
       } catch (_) {}
       el.textContent = `Audio natif prêt • ${speech} • ${whisper} • Android ${d.sdk ?? '?'} • ${d.manufacturer ?? ''} ${d.model ?? ''} • micro: ${d.permission ?? 'à demander'} • v${APP_VERSION}`;
@@ -716,7 +968,7 @@ Madagasikara`;
 
   function collectDraft() {
     return {
-      version: 3,
+      version: 4,
       updatedAt: new Date().toISOString(),
       investigatorGrade: $('#investigatorGrade').value,
       investigatorName: $('#investigatorName').value,
@@ -725,6 +977,8 @@ Madagasikara`;
       investigatorUnit: $('#investigatorUnit').value,
       personRole: $('#personRole').value,
       speechLanguage: $('#speechLanguage').value,
+      speechMode: getSpeechMode(),
+      microProfile: $('#microProfile')?.value || 'near_field',
       autoTranscription: $('#autoTranscription').checked,
       localSpeechOnly: $('#localSpeechOnly').checked,
       speechEngine: $('#speechEngine')?.value || 'smart',
@@ -762,6 +1016,8 @@ Madagasikara`;
     const ids = ['investigatorGrade','investigatorName','investigatorQuality','investigatorFunction','investigatorUnit','personRole','speechLanguage','personIdentity','identityVerification','place','startDateTime','endDateTime','closingFormula','personSignatureLabel'];
     ids.forEach(id => { if (d[id] !== undefined && $(`#${id}`)) $(`#${id}`).value = d[id]; });
     const legacyDraft = Number(d.version || 0) < 3;
+    if (d.microProfile !== undefined && $('#microProfile')) $('#microProfile').value = d.microProfile;
+    if (d.speechMode && Number(d.version || 0) >= 4) setSpeechMode(d.speechMode);
     if (d.autoTranscription !== undefined) $('#autoTranscription').checked = Boolean(d.autoTranscription);
     if (legacyDraft) $('#localSpeechOnly').checked = false;
     else if (d.localSpeechOnly !== undefined) $('#localSpeechOnly').checked = Boolean(d.localSpeechOnly);
@@ -786,7 +1042,7 @@ Madagasikara`;
       const questions = [];
       for (const exchange of state.exchanges) {
         const keepLive = $('#keepLiveAlternative')?.checked !== false;
-        const item = { question: exchange.question, answer: exchange.answer, signatureAfter: exchange.signatureAfter, transcription: { question: { live: keepLive ? (exchange.questionLiveTranscript || '') : '', ai: exchange.questionAiTranscript || '', model: exchange.questionAiModel || '', elapsedMs: exchange.questionAiElapsedMs || 0 }, answer: { live: keepLive ? (exchange.answerLiveTranscript || '') : '', ai: exchange.answerAiTranscript || '', model: exchange.answerAiModel || '', elapsedMs: exchange.answerAiElapsedMs || 0 } } };
+        const item = { question: exchange.question, answer: exchange.answer, signatureAfter: exchange.signatureAfter, transcription: { question: { live: keepLive ? (exchange.questionLiveTranscript || '') : '', cloud: exchange.questionCloudTranscript || '', cloudModel: exchange.questionCloudModel || '', cloudLatencyMs: exchange.questionCloudLatencyMs || 0, ai: exchange.questionAiTranscript || '', model: exchange.questionAiModel || '', elapsedMs: exchange.questionAiElapsedMs || 0 }, answer: { live: keepLive ? (exchange.answerLiveTranscript || '') : '', cloud: exchange.answerCloudTranscript || '', cloudModel: exchange.answerCloudModel || '', cloudLatencyMs: exchange.answerCloudLatencyMs || 0, ai: exchange.answerAiTranscript || '', model: exchange.answerAiModel || '', elapsedMs: exchange.answerAiElapsedMs || 0 } } };
         for (const kind of ['question','answer']) {
           const audioPath = exchange[`${kind}AudioPath`];
           if (audioPath && isNativeAndroid && NativeAudioRecorder?.readAudioFile) {
@@ -819,7 +1075,7 @@ Madagasikara`;
         appVersion: APP_VERSION,
         exportedAt: new Date().toISOString(),
         speechLanguage: $('#speechLanguage').value,
-        speechMode: { automatic: $('#autoTranscription').checked, preferOffline: $('#localSpeechOnly').checked, localOnly: $('#speechEngine')?.value === 'offline', engine: $('#speechEngine')?.value || 'smart', whisperModel: $('#whisperModel')?.value || '', whisperReview: $('#aiReviewAfterStop')?.checked !== false, learnedCorrections: $('#learnFromCorrections')?.checked !== false, vocabulary: buildBiasingText().split(/\n+/).filter(Boolean) },
+        speechMode: { mode: getSpeechMode(), automatic: $('#autoTranscription').checked, preferOffline: $('#localSpeechOnly').checked, localOnly: getSpeechMode() === 'private', engine: $('#speechEngine')?.value || 'smart', onlineConfigured: cloudConfigured(), onlineProvider: getSpeechMode() === 'cloud' ? 'secure-relay' : '', microProfile: $('#microProfile')?.value || 'near_field', whisperModel: $('#whisperModel')?.value || '', whisperReview: $('#aiReviewAfterStop')?.checked === true, learnedCorrections: $('#learnFromCorrections')?.checked !== false, vocabulary: buildBiasingText().split(/\n+/).filter(Boolean) },
         investigator: {
           grade: state.profile.grade,
           name: state.profile.name,

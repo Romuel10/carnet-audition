@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: assistant-pv-transcription-relay
+    runtime: node
+    plan: starter
+    rootDir: .
+    buildCommand: npm install --omit=dev
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: APP_SHARED_SECRET
+        sync: false
+      - key: OPENAI_PREVIEW_MODEL
+        value: gpt-4o-mini-transcribe
+      - key: OPENAI_FINAL_MODEL
+        value: gpt-transcribe

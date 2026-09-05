@@ -1,54 +1,57 @@
-# Carnet d’audition — Assistant PV Gendarmerie v3.1.0-beta.3
+# Carnet d’audition — Assistant PV Gendarmerie v3.2.0-beta.1
 
-## Correctif principal : texte immédiat + arrêt rapide
+Cette version part de la v3.1 beta.3 validée sur Android et ajoute une refonte de l’interface, une vraie icône d’installation et un mode de transcription en ligne haute précision avec secours automatique. Le relais ne reçoit jamais la clé du fournisseur depuis l’APK ; seuls l’audio nécessaire à la transcription et, si vous le renseignez, le vocabulaire métier du champ Dictionnaire sont envoyés au service en ligne.
 
-Cette version corrige les deux problèmes observés sur Android :
+## Nouveautés principales
 
-1. **La transcription directe ne produisait aucun texte.** La beta.2 essayait d’injecter notre flux `AudioRecord` dans `SpeechRecognizer`. Certains moteurs Android/Speech Services n’acceptent pas correctement ce flux. La beta.3 utilise désormais le **service de dictée Android directement**, en parallèle avec un enregistreur audio non privé afin de permettre le partage du microphone sur Android récent.
-2. **L’arrêt restait longtemps sur « sauvegarde… ».** La beta.2 convertissait immédiatement tout le WAV en Base64. La beta.3 garde le fichier WAV natif sur le téléphone et ne le convertit qu’au moment de l’export `.pvaud`. L’arrêt doit donc être beaucoup plus rapide.
+- Interface entièrement revue : style sobre, professionnel, sans emojis, animations discrètes, meilleure hiérarchie visuelle et boutons d’enregistrement plus clairs.
+- Icône Assistant PV appliquée à l’APK Android et à l’écran d’installation.
+- Mode **En ligne haute précision** : la dictée Android continue d’afficher un texte provisoire immédiatement, pendant que l’audio PCM est envoyé vers un relais sécurisé. Le texte cloud corrige progressivement le texte provisoire.
+- Secours automatique : si le réseau ou le relais tombe, l’enregistrement audio continue et la dictée Android reste active.
+- Mode **Dictée Android** conservé.
+- Mode **Local privé** conservé avec le moteur local existant.
+- Le profil enquêteur reste enregistré et modifiable.
+- L’export `.pvaud` conserve désormais la transcription provisoire et la transcription en ligne, en plus des audios.
 
-## Mode recommandé
+## Pourquoi un relais sécurisé ?
 
-- `Mode de transcription` : **Rapide : dictée Android + audio**
-- `Langue` : **Malagasy (mg-MG)**
-- `Transcription en direct` : activée
-- `Forcer/privilégier hors ligne` : **désactivé** pour laisser Android utiliser son meilleur moteur vocal Malagasy
-- `Réviser automatiquement avec Whisper` : **désactivé** par défaut, car Whisper sur un téléphone peu puissant peut prendre plusieurs secondes ou davantage.
+La clé du fournisseur de transcription ne doit jamais être incluse dans l’APK. Le dossier `relay/` contient un petit serveur Node.js qui garde la clé côté serveur et reçoit uniquement le flux audio de la Question/Réponse.
 
-Whisper reste disponible comme révision facultative et hors ligne. Le fichier audio original est toujours conservé.
+Le relais utilise par défaut :
 
-## Installation / mise à jour
+- `gpt-4o-mini-transcribe` pour les corrections rapides pendant la parole ;
+- `gpt-transcribe` pour la transcription finale après l’arrêt.
 
-Copier cette version dans le dépôt Termux puis :
+La langue envoyée est `mg` pour le malagasy. Le dictionnaire prioritaire, s’il est renseigné, est transmis comme contexte de transcription. Le profil enquêteur et l’identité de la personne ne sont pas ajoutés automatiquement au contexte en ligne.
+
+## Mise à jour du dépôt Android
+
+Après décompression du ZIP :
 
 ```bash
 cd ~/carnet-audition
-cp -r /sdcard/Download/carnet_beta9/. .
+cp -r /sdcard/Download/carnet-audition-mobile-v3.2.0-beta1/. .
 npm install
 git add -A
-git commit -m "Speed up live Malagasy dictation beta3"
+git commit -m "Modern UI and online Malagasy transcription v3.2"
 git push origin main
 ```
 
-Dans GitHub Actions, récupérer l’artifact :
+GitHub Actions construit l’artifact :
 
-`Carnet-audition-v3.1-beta3-debug-apk`
+`Carnet-audition-v3.2-beta1-debug-apk`
 
-## Test conseillé
+## Configuration du mode en ligne
 
-1. Installer la beta.3.
-2. Vérifier `v3.1 beta.3` en haut.
-3. Choisir `Malagasy (mg-MG)`.
-4. Laisser le mode hors ligne **décoché**.
-5. Appuyer sur `Question` et parler 5 à 10 secondes.
-6. Le texte doit commencer à apparaître pendant la parole ou après une courte pause.
-7. Appuyer sur `Arrêter` : le WAV doit être finalisé rapidement.
-8. Activer Whisper seulement si vous souhaitez ensuite améliorer le texte.
+1. Déployer le dossier `relay/` sur un serveur Node.js exposé en HTTPS/WSS.
+2. Définir sur ce serveur `OPENAI_API_KEY` et `APP_SHARED_SECRET`.
+3. Dans l’application, choisir **En ligne haute précision**.
+4. Renseigner l’URL `wss://...` du relais et le jeton `APP_SHARED_SECRET`.
+5. Appuyer sur **Tester la connexion**.
+6. Quand le statut indique **Connexion sécurisée**, faire un essai fictif avant une audition réelle.
+
+Ne placez jamais `OPENAI_API_KEY` dans GitHub, dans Termux en clair dans le projet, ni dans l’application mobile.
 
 ## Confidentialité
 
-Le mode direct Android peut, selon le moteur installé sur le téléphone, utiliser un service distant. Pour une audition qui doit rester strictement hors ligne, choisissez le mode `Privé : audio + Whisper après l’arrêt`. Ce mode est plus lent mais garde la reconnaissance locale après téléchargement du modèle.
-
-## Export
-
-L’export `.pvaud` reste compatible avec Assistant PV PC. Les données audio ne sont converties en Base64 qu’au moment où vous appuyez sur **Enregistrer l’audition (.pvaud)**.
+En mode en ligne, le flux audio de la Question/Réponse est transmis au service configuré pour transcription. L’identité complète de la personne, le profil de l’enquêteur et le fichier `.pvaud` ne sont pas envoyés par le relais fourni. Utiliser ce mode pour des données réelles uniquement si le cadre de travail de l’unité autorise le service distant choisi.

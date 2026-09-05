@@ -47,7 +47,11 @@ jobs:
           test -f android/app/src/main/java/mg/assistantpv/carnet/NativeAudioRecorderPlugin.java
           test -f android/app/src/main/java/mg/assistantpv/carnet/NativeWhisperPlugin.java
           test -f android/app/src/main/jni/whisper/CMakeLists.txt
+          test -f android/app/src/main/res/mipmap-nodpi/assistant_pv_icon.png
+          test -f android/app/src/main/res/mipmap-anydpi-v26/assistant_pv_icon.xml
+          grep -n "drainPcmChunks" android/app/src/main/java/mg/assistantpv/carnet/NativeAudioRecorderPlugin.java
           grep -n "NativeWhisperPlugin" android/app/src/main/java/mg/assistantpv/carnet/MainActivity.java
+          grep -n "assistant_pv_icon" android/app/src/main/AndroidManifest.xml
           grep -n "src/main/jni/whisper/CMakeLists.txt" android/app/build.gradle
 
       - name: Build debug APK
@@ -57,5 +61,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Carnet-audition-v3.1-beta3-debug-apk
+          name: Carnet-audition-v3.2-beta1-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk

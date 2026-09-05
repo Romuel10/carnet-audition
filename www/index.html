@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#174c3a" />
+  <meta name="theme-color" content="#0d2032" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <title>Carnet d’audition — Assistant PV</title>
@@ -15,83 +15,141 @@
   <header class="app-header">
     <div class="brand-row">
       <img src="icon.png" alt="" class="app-icon" />
-      <div><span class="kicker">ASSISTANT PV GENDARMERIE</span><h1>Carnet d’audition <small style="font-size:.38em;opacity:.8;white-space:nowrap">v3.1 beta.3</small></h1></div>
+      <div class="brand-copy">
+        <span class="kicker">ASSISTANT PV GENDARMERIE</span>
+        <div class="title-line"><h1>Carnet d’audition</h1><span class="version-badge">v3.2 beta.1</span></div>
+      </div>
     </div>
-    <span id="saveState" class="save-state">Brouillon local</span>
+    <div class="header-state">
+      <span class="state-dot" aria-hidden="true"></span>
+      <span id="saveState" class="save-state">Brouillon local</span>
+    </div>
   </header>
 
   <main class="page">
-    <section class="notice">
-      <strong>Dictée intelligente Malagasy + audio original</strong>
-      <p>Le mode rapide utilise directement le service de dictée Android pendant que l’audio est enregistré. Le texte doit apparaître en quelques instants. Whisper reste disponible comme révision locale facultative après l’arrêt. L’audio original est toujours conservé.</p>
+    <section class="status-banner" aria-label="État de la transcription">
+      <div class="status-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 3v10m-4-4v4a4 4 0 0 0 8 0V9M6 13a6 6 0 0 0 12 0M12 19v3m-4 0h8"/></svg>
+      </div>
+      <div class="status-copy">
+        <strong>Audio original et transcription synchronisés</strong>
+        <p>Le mode en ligne haute précision affiche d’abord une dictée immédiate, puis remplace progressivement le texte provisoire par une transcription cloud plus fiable.</p>
+      </div>
+      <span id="cloudStatus" class="connection-pill is-neutral">Non configuré</span>
     </section>
 
-    <section class="card profile-card">
+    <section class="card profile-card reveal">
       <div class="section-title with-action">
-        <span>👤</span>
-        <div><h2>Mon profil enquêteur</h2><p>Enregistré sur ce téléphone : vous ne le saisissez qu’une fois.</p></div>
+        <span class="section-index">A</span>
+        <div><h2>Profil de l’enquêteur</h2><p>Enregistré sur cet appareil et réutilisé automatiquement.</p></div>
         <button id="editProfileBtn" class="btn secondary" type="button">Modifier</button>
       </div>
       <div id="profileSummary" class="profile-summary"></div>
       <div id="profileEditor" class="profile-editor" hidden>
         <div class="grid two">
-          <label>Grade<input id="investigatorGrade" placeholder="Ex. Gendarme" /></label>
-          <label>Nom et prénoms<input id="investigatorName" placeholder="Ex. RATOVOSON ..." /></label>
+          <label>Grade<input id="investigatorGrade" autocomplete="organization-title" placeholder="Ex. Gendarme" /></label>
+          <label>Nom et prénoms<input id="investigatorName" autocomplete="name" placeholder="Nom et prénoms" /></label>
           <label>Qualité<select id="investigatorQuality"><option>APJ</option><option>OPJ</option><option>Autre</option></select></label>
           <label>Fonction<input id="investigatorFunction" placeholder="Ex. Enquêteur" /></label>
           <label class="span-2">Unité / Brigade<input id="investigatorUnit" placeholder="Ex. Brigade territoriale de ..." /></label>
         </div>
         <div class="profile-actions">
-          <button id="saveProfileBtn" class="btn primary" type="button">Enregistrer mon profil</button>
+          <button id="saveProfileBtn" class="btn primary" type="button">Enregistrer</button>
           <button id="cancelProfileBtn" class="btn ghost" type="button">Annuler</button>
         </div>
       </div>
     </section>
 
-    <section class="card ai-card">
-      <div class="section-title"><span>🧠</span><div><h2>Dictée intelligente Malagasy</h2><p>Priorité au texte immédiat. La révision Whisper est facultative pour ne pas ralentir l’audition.</p></div></div>
-      <div class="grid two">
-        <label>Mode de transcription<select id="speechEngine"><option value="smart" selected>Rapide : dictée Android + audio (recommandé)</option><option value="live">Direct Android seulement</option><option value="offline">Privé : audio + Whisper après l’arrêt</option></select></label>
-        <label>Modèle IA local<select id="whisperModel"><option value="base-q5_1" selected>Base Q5 — recommandé (~60 Mo)</option><option value="small-q5_1">Small Q5 — plus précis (~190 Mo)</option></select></label>
-        <div class="span-2 ai-model-box">
-          <div><strong id="whisperModelStatus">Modèle IA non vérifié</strong><small id="whisperModelDetails">Téléchargez le modèle une fois ; ensuite la révision fonctionne sans Internet.</small></div>
-          <div class="ai-actions"><button id="downloadWhisperBtn" class="btn secondary" type="button">Télécharger le modèle IA</button><button id="deleteWhisperBtn" class="btn ghost" type="button">Supprimer</button></div>
-          <div class="progress-track"><div id="whisperProgress" class="progress-bar"></div></div>
-        </div>
-        <label class="span-2">Dictionnaire prioritaire<textarea id="speechDictionary" rows="5" placeholder="Un mot ou une expression par ligne"></textarea><small>Le moteur Android est orienté vers ces mots ; Whisper les reçoit aussi comme contexte. Ajoutez noms, fokontany, communes, grades et termes juridiques.</small></label>
-        <div class="span-2 speech-privacy-options">
-          <label class="toggle-row"><input id="aiReviewAfterStop" type="checkbox" /> Réviser automatiquement avec Whisper après l’arrêt (plus lent)</label>
-          <label class="toggle-row"><input id="keepLiveAlternative" type="checkbox" checked /> Conserver aussi la transcription directe dans le fichier .pvaud pour comparaison</label>
-          <label class="toggle-row"><input id="learnFromCorrections" type="checkbox" checked /> Apprendre localement les mots que je corrige</label>
-          <small>Le téléchargement du modèle nécessite Internet une seule fois. La révision Whisper se fait ensuite entièrement sur le téléphone. Les mots appris restent dans le dictionnaire local de cet appareil.</small>
-        </div>
+    <section class="card transcription-card reveal">
+      <div class="section-title">
+        <span class="section-index">B</span>
+        <div><h2>Transcription vocale</h2><p>Choisissez le niveau de rapidité, précision et confidentialité adapté à l’audition.</p></div>
       </div>
+
+      <div class="mode-grid" role="radiogroup" aria-label="Mode de transcription">
+        <label class="mode-option recommended">
+          <input type="radio" name="speechModeChoice" value="cloud" checked />
+          <span class="mode-check"></span>
+          <span class="mode-content"><strong>En ligne haute précision</strong><small>Recommandé. Texte provisoire immédiat, puis correction cloud en continu.</small></span>
+          <span class="recommended-label">Recommandé</span>
+        </label>
+        <label class="mode-option">
+          <input type="radio" name="speechModeChoice" value="android" />
+          <span class="mode-check"></span>
+          <span class="mode-content"><strong>Dictée Android</strong><small>Rapide, sans service cloud configuré, précision variable selon le téléphone.</small></span>
+        </label>
+        <label class="mode-option">
+          <input type="radio" name="speechModeChoice" value="private" />
+          <span class="mode-check"></span>
+          <span class="mode-content"><strong>Mode local privé</strong><small>L’audio reste sur l’appareil. Transcription locale après l’arrêt.</small></span>
+        </label>
+      </div>
+
+      <div class="grid two compact-grid">
+        <label>Langue<select id="speechLanguage"><option value="mg-MG" selected>Malagasy</option><option value="fr-FR">Français</option></select></label>
+        <label>Qualité du micro<select id="microProfile"><option value="near_field" selected>Téléphone à proximité</option><option value="far_field">Téléphone posé à distance</option></select></label>
+      </div>
+
+      <div class="cloud-setup" id="cloudSetup">
+        <div class="cloud-setup-head">
+          <div><strong>Service de transcription en ligne</strong><small>Correction continue du texte avec secours automatique par la dictée du téléphone.</small></div>
+          <button id="testCloudBtn" class="btn secondary" type="button">Tester</button>
+        </div>
+        <details class="cloud-config-details">
+          <summary>Configurer le service en ligne</summary>
+          <div class="cloud-config-body">
+            <div class="grid two">
+              <label class="span-2">Adresse sécurisée du service<input id="onlineRelayUrl" inputmode="url" placeholder="wss://votre-service.example.com" /></label>
+              <label class="span-2">Jeton d’accès<input id="onlineRelayToken" type="password" autocomplete="off" placeholder="Jeton du service" /></label>
+            </div>
+            <p class="privacy-note">En mode en ligne, l’audio de la question ou de la réponse est transmis au service configuré. Utilisez cette fonction pour des données réelles uniquement si votre organisation l’autorise.</p>
+          </div>
+        </details>
+      </div>
+
+      <details class="advanced-panel" id="advancedTranscription">
+        <summary>Paramètres avancés</summary>
+        <div class="advanced-body">
+          <label>Dictionnaire prioritaire<textarea id="speechDictionary" rows="5" placeholder="Un mot ou une expression par ligne"></textarea><small>Noms, lieux, fokontany, communes, grades et vocabulaire juridique.</small></label>
+          <div class="option-list">
+            <label class="toggle-row"><input id="autoTranscription" type="checkbox" checked /> Afficher une dictée provisoire immédiatement</label>
+            <label class="toggle-row"><input id="localSpeechOnly" type="checkbox" /> Forcer le moteur Android hors ligne</label>
+            <label class="toggle-row"><input id="keepLiveAlternative" type="checkbox" checked /> Conserver la transcription provisoire dans le fichier d’audition</label>
+            <label class="toggle-row"><input id="learnFromCorrections" type="checkbox" checked /> Enrichir le dictionnaire local à partir des corrections</label>
+          </div>
+
+          <div class="local-engine-block">
+            <div class="local-engine-head"><div><strong>Transcription locale de secours</strong><small>Utilisée uniquement en mode local privé ou pour une révision manuelle.</small></div></div>
+            <div class="grid two">
+              <label>Modèle local<select id="whisperModel"><option value="base-q5_1" selected>Base Q5 — plus léger</option><option value="small-q5_1">Small Q5 — plus précis</option></select></label>
+              <div class="local-actions"><button id="downloadWhisperBtn" class="btn secondary" type="button">Installer le modèle</button><button id="deleteWhisperBtn" class="btn ghost" type="button">Supprimer</button></div>
+            </div>
+            <div class="model-status"><strong id="whisperModelStatus">Modèle local non vérifié</strong><small id="whisperModelDetails"></small><div class="progress-track"><div id="whisperProgress" class="progress-bar"></div></div></div>
+            <label class="toggle-row"><input id="aiReviewAfterStop" type="checkbox" /> Réviser automatiquement avec le modèle local après l’arrêt</label>
+          </div>
+          <select id="speechEngine" hidden><option value="smart">smart</option><option value="live">live</option><option value="offline">offline</option></select>
+        </div>
+      </details>
     </section>
 
-    <section class="card identity-card">
-      <div class="section-title"><span>1</span><div><h2>Contexte de l’audition</h2><p>Ces informations seront importées dans le PV sur le PC.</p></div></div>
+    <section class="card identity-card reveal">
+      <div class="section-title"><span class="section-index">1</span><div><h2>Contexte de l’audition</h2><p>Informations destinées au dossier et à l’import sur le poste de travail.</p></div></div>
       <div class="grid two">
         <label>Qualité de la personne<select id="personRole"><option>Victime</option><option>Témoin</option><option>Auteur présumé</option><option>Personne soupçonnée</option><option>Personne mise en cause</option><option selected>Personne entendue</option><option>Autre</option></select></label>
-        <label>Langue de reconnaissance<select id="speechLanguage"><option value="mg-MG" selected>Malagasy (mg-MG)</option><option value="fr-FR">Français (fr-FR)</option></select></label>
-        <div class="span-2 speech-privacy-options">
-          <label class="toggle-row"><input id="autoTranscription" type="checkbox" checked /> Transcription en direct pendant l’enregistrement</label>
-          <label class="toggle-row"><input id="localSpeechOnly" type="checkbox" /> Forcer/privilégier la reconnaissance hors ligne (peut ne pas reconnaître le Malagasy)</label>
-          <small>Pour une dictée proche d’un clavier moderne, laissez le mode hors ligne décoché : Android peut utiliser son meilleur service vocal disponible. Si la confidentialité interdit un service distant, choisissez le mode Privé ; le texte sera alors produit par Whisper après l’arrêt, plus lentement.</small>
-        </div>
+        <label>Lieu<input id="place" value="au bureau de notre unité" /></label>
         <label class="span-2">Identité complète de la personne<textarea id="personIdentity" rows="5" placeholder="Nom, prénoms, naissance, filiation, profession, domicile, CIN..."></textarea></label>
         <label class="span-2">Vérification / pièce d’identité<textarea id="identityVerification" rows="2" placeholder="CIN n°..., délivrée le... à..."></textarea></label>
-        <label>Lieu<input id="place" value="au bureau de notre unité" /></label>
         <label>Début de l’audition<input id="startDateTime" type="datetime-local" /></label>
       </div>
     </section>
 
-    <section class="card exchanges-card">
-      <div class="section-title with-action"><span>2</span><div><h2>Questions et réponses</h2><p>Chaque échange conserve son audio et sa transcription.</p></div><button id="addExchangeBtn" class="btn secondary" type="button">+ Ajouter</button></div>
+    <section class="card exchanges-card reveal">
+      <div class="section-title with-action"><span class="section-index">2</span><div><h2>Questions et réponses</h2><p>Chaque échange conserve le texte final, la dictée provisoire et l’audio original.</p></div><button id="addExchangeBtn" class="btn secondary" type="button">Ajouter un échange</button></div>
       <div id="exchanges" class="exchanges"></div>
     </section>
 
-    <section class="card closing-card">
-      <div class="section-title"><span>3</span><div><h2>Clôture</h2><p>Relisez le texte avant de terminer l’audition.</p></div></div>
+    <section class="card closing-card reveal">
+      <div class="section-title"><span class="section-index">3</span><div><h2>Clôture</h2><p>Relisez le texte et vérifiez les passages incertains à l’écoute.</p></div></div>
       <div class="grid two">
         <label>Fin de l’audition<input id="endDateTime" type="datetime-local" /></label>
         <label>Signature de la personne<input id="personSignatureLabel" value="LE DECLARANT" /></label>
@@ -99,23 +157,25 @@
       </div>
     </section>
 
-    <section class="export-card card">
-      <div><h2>Enregistrer l’audition comme fichier</h2><p>Le fichier <code>.pvaud</code> contient le texte, le profil de l’enquêteur et tous les audios. Il est prêt à être importé dans Assistant PV Gendarmerie sur le PC.</p></div>
-      <div class="export-actions"><button id="exportBtn" class="btn primary large" type="button">💾 Enregistrer l’audition (.pvaud)</button><button id="newBtn" class="btn ghost" type="button">Nouvelle audition</button></div>
+    <section class="export-card card reveal">
+      <div class="export-copy"><span class="file-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7zM14 3v5h5M9 13h6m-6 4h6"/></svg></span><div><h2>Fichier d’audition</h2><p>Enregistre le texte, le profil de l’enquêteur, les métadonnées de transcription et tous les audios dans un fichier <code>.pvaud</code> importable sur le PC.</p></div></div>
+      <div class="export-actions"><button id="exportBtn" class="btn primary large" type="button">Enregistrer le fichier .pvaud</button><button id="newBtn" class="btn ghost" type="button">Nouvelle audition</button></div>
       <div id="exportStatus" class="export-status"></div>
     </section>
   </main>
 
   <template id="exchangeTemplate">
     <article class="exchange-card" data-exchange-id="">
-      <div class="exchange-head"><strong class="exchange-number">Échange</strong><button class="icon-btn remove-exchange" type="button" title="Supprimer">×</button></div>
+      <div class="exchange-head"><div><span class="exchange-kicker">ÉCHANGE</span><strong class="exchange-number">Échange</strong></div><button class="icon-btn remove-exchange" type="button" title="Supprimer" aria-label="Supprimer cet échange"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
       <div class="speech-block">
-        <label>FANONTANIANA<textarea class="question-text" rows="3" placeholder="La question se transforme en texte ici pendant que vous parlez. Vous pouvez ensuite la corriger."></textarea></label>
-        <div class="record-row"><button class="record-btn question-record" type="button"><span class="mic">●</span><span class="record-label">Question</span></button><span class="clip-status question-status">Aucun audio</span><audio class="question-player" controls hidden></audio></div>
+        <div class="speech-heading"><label>FANONTANIANA</label><span class="live-badge question-live-badge" hidden>Texte provisoire</span></div>
+        <textarea class="question-text" rows="3" placeholder="Le texte de la question apparaîtra ici pendant que vous parlez."></textarea>
+        <div class="record-row"><button class="record-btn question-record" type="button"><span class="record-icon"><svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Zm-7 9a7 7 0 0 0 14 0M12 19v3m-4 0h8"/></svg></span><span class="record-label">Enregistrer la question</span></button><div class="clip-meta"><span class="clip-status question-status">Aucun audio</span><span class="cloud-quality question-cloud-quality"></span></div><audio class="question-player" controls hidden></audio></div>
       </div>
       <div class="speech-block answer-block">
-        <label>VALINY<textarea class="answer-text" rows="5" placeholder="La réponse se transforme en texte ici pendant que la personne parle. Vous pouvez ensuite la corriger."></textarea></label>
-        <div class="record-row"><button class="record-btn answer-record" type="button"><span class="mic">●</span><span class="record-label">Réponse</span></button><span class="clip-status answer-status">Aucun audio</span><audio class="answer-player" controls hidden></audio></div>
+        <div class="speech-heading"><label>VALINY</label><span class="live-badge answer-live-badge" hidden>Texte provisoire</span></div>
+        <textarea class="answer-text" rows="5" placeholder="La réponse apparaîtra ici pendant que la personne parle."></textarea>
+        <div class="record-row"><button class="record-btn answer-record" type="button"><span class="record-icon"><svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Zm-7 9a7 7 0 0 0 14 0M12 19v3m-4 0h8"/></svg></span><span class="record-label">Enregistrer la réponse</span></button><div class="clip-meta"><span class="clip-status answer-status">Aucun audio</span><span class="cloud-quality answer-cloud-quality"></span></div><audio class="answer-player" controls hidden></audio></div>
       </div>
       <label class="signature-row"><input class="signature-after" type="checkbox" /> Prévoir une signature après cet échange</label>
     </article>

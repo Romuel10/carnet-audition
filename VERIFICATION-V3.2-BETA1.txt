@@ -1,0 +1,19 @@
+Carnet d'audition v3.2.0-beta.1
+
+Contrôles réalisés avant emballage :
+- version package : 3.2.0-beta.1
+- syntaxe JavaScript : application, service worker, scripts Android et relais Node
+- JSON : package, Capacitor, manifeste Web et relais
+- HTML : aucun identifiant dupliqué ; toutes les références statiques #id du JavaScript existent
+- interface : aucun emoji pictographique ; icônes SVG internes ; animations CSS discrètes avec prefers-reduced-motion
+- transcription : mode en ligne / Android / local, secours Android si le service en ligne est indisponible
+- pont audio natif : flux PCM 16 kHz drainPcmChunks + conservation WAV
+- confidentialité : aucune clé fournisseur dans www/ ou l'APK ; le contexte cloud n'inclut pas automatiquement le profil enquêteur ni l'identité de la personne
+- icône Android : ressource adaptative + fallback PNG générés par scripts/install-app-icon.js
+- export .pvaud : schéma existant conservé, audios + transcriptions provisoires/en ligne/locales
+- workflow GitHub : artifact Carnet-audition-v3.2-beta1-debug-apk
+
+À valider sur appareil réel :
+- latence et qualité de la transcription en ligne sur réseau mobile malgache
+- exactitude Malagasy / code-switching Malagasy-Français
+- import complet du .pvaud dans Assistant PV PC
