@@ -1,0 +1,32 @@
+Carnet d'audition v3.1.0-beta.1
+
+NOUVEAUTÉS
+- audio natif WAV 16 kHz mono conservé ;
+- transcription Android en direct avec résultats partiels ;
+- vocabulaire prioritaire transmis au moteur Android API 33+ ;
+- indicateur de confiance quand disponible ;
+- moteur Whisper natif local via whisper.cpp v1.9.1 ;
+- modèles Base Q5 (~57 MiB) et Small Q5 (~181 MiB), téléchargés à la demande ;
+- contrôle SHA-1 des modèles après téléchargement ;
+- transcription Whisper Malagasy forcée sur langue mg ;
+- contexte juridique / noms / lieux transmis comme prompt initial ;
+- mode Intelligent, Direct Android et Privé local ;
+- apprentissage local léger des mots corrigés ;
+- transcription directe + transcription IA enregistrables dans le .pvaud ;
+- profil enquêteur persistant et export .pvaud conservés.
+
+CONTRÔLES STATIQUES RÉALISÉS
+- www/app.js : node --check OK ;
+- scripts/install-native-recorder.js : node --check OK ;
+- scripts/install-whisper-engine.js : node --check OK ;
+- package.json / capacitor.config.json : JSON valides ;
+- aucun id HTML dupliqué ;
+- simulation d'injection Android : les deux plugins sont enregistrés dans MainActivity ;
+- simulation build.gradle : NDK/CMake, externalNativeBuild et CMAKE_BUILD_TYPE=Release injectés ;
+- simulation AndroidManifest : RECORD_AUDIO + INTERNET présents ;
+- dictionnaire Java généré avec split regex \\r?\\n correct ;
+- schéma .pvaud maintenu : mg.assistantpv.audition/1 ;
+- service worker cache mis à jour pour v3.1 beta.1.
+
+TEST MATÉRIEL RESTANT
+La compilation native Android et les performances réelles de Whisper doivent être validées par GitHub Actions puis sur le téléphone cible. Base Q5 est recommandé en premier sur un téléphone à mémoire/CPU modestes.

@@ -1,11 +1,11 @@
 {
   "name": "carnet-audition-assistant-pv",
-  "version": "3.0.0-beta.6",
+  "version": "3.1.0-beta.1",
   "private": true,
-  "description": "Carnet d'audition mobile avec profil enquêteur persistant, audio natif, transcription Android en direct et export .pvaud vers le PC.",
+  "description": "Carnet d'audition mobile avec profil enquêteur persistant, audio natif, dictée intelligente Malagasy en direct, dictionnaire contextuel, révision IA Whisper hors ligne et export .pvaud vers le PC.",
   "scripts": {
-    "android:add": "npx cap add android && node scripts/install-native-recorder.js",
-    "android:sync": "npx cap sync android && node scripts/install-native-recorder.js",
+    "android:add": "npx cap add android && node scripts/install-native-recorder.js && node scripts/install-whisper-engine.js",
+    "android:sync": "npx cap sync android && node scripts/install-native-recorder.js && node scripts/install-whisper-engine.js",
     "android:open": "npm run android:sync && npx cap open android"
   },
   "dependencies": {

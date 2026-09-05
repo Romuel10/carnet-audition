@@ -15,15 +15,15 @@
   <header class="app-header">
     <div class="brand-row">
       <img src="icon.png" alt="" class="app-icon" />
-      <div><span class="kicker">ASSISTANT PV GENDARMERIE</span><h1>Carnet d’audition <small style="font-size:.38em;opacity:.8;white-space:nowrap">v3 beta.6</small></h1></div>
+      <div><span class="kicker">ASSISTANT PV GENDARMERIE</span><h1>Carnet d’audition <small style="font-size:.38em;opacity:.8;white-space:nowrap">v3.1 beta.1</small></h1></div>
     </div>
     <span id="saveState" class="save-state">Brouillon local</span>
   </header>
 
   <main class="page">
     <section class="notice">
-      <strong>Audio + texte en direct</strong>
-      <p>Quand vous appuyez sur Question ou Réponse, l’audio original est enregistré et le texte reconnu s’affiche au fur et à mesure. Relisez et corrigez toujours la transcription avant l’enregistrement du fichier d’audition.</p>
+      <strong>Dictée intelligente Malagasy + audio original</strong>
+      <p>Le texte apparaît pendant que vous parlez. Après l’arrêt, le moteur IA local Whisper peut relire l’audio hors ligne et améliorer la transcription. L’audio original reste toujours conservé.</p>
     </section>
 
     <section class="card profile-card">
@@ -44,6 +44,26 @@
         <div class="profile-actions">
           <button id="saveProfileBtn" class="btn primary" type="button">Enregistrer mon profil</button>
           <button id="cancelProfileBtn" class="btn ghost" type="button">Annuler</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card ai-card">
+      <div class="section-title"><span>🧠</span><div><h2>Dictée intelligente Malagasy</h2><p>Texte immédiat + révision IA locale après chaque Question/Réponse.</p></div></div>
+      <div class="grid two">
+        <label>Mode de transcription<select id="speechEngine"><option value="smart" selected>Intelligent : direct + Whisper local</option><option value="live">Direct Android seulement</option><option value="offline">Privé : Whisper local après l’arrêt</option></select></label>
+        <label>Modèle IA local<select id="whisperModel"><option value="base-q5_1" selected>Base Q5 — recommandé (~60 Mo)</option><option value="small-q5_1">Small Q5 — plus précis (~190 Mo)</option></select></label>
+        <div class="span-2 ai-model-box">
+          <div><strong id="whisperModelStatus">Modèle IA non vérifié</strong><small id="whisperModelDetails">Téléchargez le modèle une fois ; ensuite la révision fonctionne sans Internet.</small></div>
+          <div class="ai-actions"><button id="downloadWhisperBtn" class="btn secondary" type="button">Télécharger le modèle IA</button><button id="deleteWhisperBtn" class="btn ghost" type="button">Supprimer</button></div>
+          <div class="progress-track"><div id="whisperProgress" class="progress-bar"></div></div>
+        </div>
+        <label class="span-2">Dictionnaire prioritaire<textarea id="speechDictionary" rows="5" placeholder="Un mot ou une expression par ligne"></textarea><small>Le moteur Android est orienté vers ces mots ; Whisper les reçoit aussi comme contexte. Ajoutez noms, fokontany, communes, grades et termes juridiques.</small></label>
+        <div class="span-2 speech-privacy-options">
+          <label class="toggle-row"><input id="aiReviewAfterStop" type="checkbox" checked /> Réviser automatiquement le texte avec Whisper après l’arrêt</label>
+          <label class="toggle-row"><input id="keepLiveAlternative" type="checkbox" checked /> Conserver aussi la transcription directe dans le fichier .pvaud pour comparaison</label>
+          <label class="toggle-row"><input id="learnFromCorrections" type="checkbox" checked /> Apprendre localement les mots que je corrige</label>
+          <small>Le téléchargement du modèle nécessite Internet une seule fois. La révision Whisper se fait ensuite entièrement sur le téléphone. Les mots appris restent dans le dictionnaire local de cet appareil.</small>
         </div>
       </div>
     </section>

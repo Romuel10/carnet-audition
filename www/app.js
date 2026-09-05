@@ -1,7 +1,34 @@
 (() => {
-  const APP_VERSION = '3.0.0-beta.6';
+  const APP_VERSION = '3.1.0-beta.1';
   const STORAGE_KEY = 'assistant-pv-carnet-draft-v1';
   const PROFILE_KEY = 'assistant-pv-carnet-investigator-profile-v1';
+  const AI_SETTINGS_KEY = 'assistant-pv-carnet-ai-settings-v1';
+  const DEFAULT_DICTIONARY = `gendarmerie
+brigade
+OPJ
+APJ
+procès-verbal
+audition
+plainte
+victime
+témoin
+suspect
+personne entendue
+perquisition
+garde à vue
+fokontany
+kaominina
+distrika
+faritra
+zandary
+fanontaniana
+valiny
+fanambarana
+porofo
+vavolombelona
+mpitory
+voampanga
+Madagasikara`;
   const DB_NAME = 'assistant-pv-carnet-audio';
   const DB_VERSION = 1;
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition || null;
@@ -29,8 +56,23 @@
     return null;
   }
 
+  function resolveNativeWhisper() {
+    if (!isNativeAndroid || !CapacitorRuntime) return null;
+    const injected = CapacitorRuntime.Plugins?.NativeWhisper;
+    if (injected) return injected;
+    if (typeof CapacitorRuntime.registerPlugin === 'function') {
+      try { return CapacitorRuntime.registerPlugin('NativeWhisper'); } catch (error) { console.warn(error); }
+    }
+    if (typeof CapacitorRuntime.nativePromise === 'function') {
+      const call = method => (options = {}) => CapacitorRuntime.nativePromise('NativeWhisper', method, options);
+      return { diagnostics: call('diagnostics'), modelStatus: call('modelStatus'), downloadModel: call('downloadModel'), deleteModel: call('deleteModel'), transcribe: call('transcribe') };
+    }
+    return null;
+  }
+
   const NativeAudioRecorder = resolveNativeAudioRecorder();
-  const state = { exchanges: [], activeRecording: null, stream: null, saveTimer: null, profile: null };
+  const NativeWhisper = resolveNativeWhisper();
+  const state = { exchanges: [], activeRecording: null, stream: null, saveTimer: null, profile: null, whisperPoll: null };
   const $ = (s, root = document) => root.querySelector(s);
   const $$ = (s, root = document) => [...root.querySelectorAll(s)];
   const uid = () => globalThis.crypto?.randomUUID?.() || `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -43,11 +85,13 @@
     bindGeneral();
     restoreDraft();
     initProfile();
+    initAiSettings();
     if (!state.exchanges.length) addExchange(); else renderExchanges();
     if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('./sw.js').catch(() => {});
     document.addEventListener('input', scheduleSave);
     document.addEventListener('change', scheduleSave);
     updateSpeechSupportMessage();
+    refreshWhisperStatus().catch(() => {});
   }
 
   function bindGeneral() {
@@ -64,6 +108,155 @@
       applyProfileToForm(state.profile);
       setProfileEditor(false);
     });
+    $('#downloadWhisperBtn')?.addEventListener('click', downloadWhisperModel);
+    $('#deleteWhisperBtn')?.addEventListener('click', deleteWhisperModel);
+    $('#whisperModel')?.addEventListener('change', () => refreshWhisperStatus().catch(() => {}));
+    $('#speechEngine')?.addEventListener('change', applySpeechEnginePreset);
+  }
+
+  function initAiSettings() {
+    let cfg = null;
+    try { cfg = JSON.parse(localStorage.getItem(AI_SETTINGS_KEY) || 'null'); } catch (_) { cfg = null; }
+    if (!$('#speechDictionary').value.trim()) $('#speechDictionary').value = cfg?.dictionary || DEFAULT_DICTIONARY;
+    if (cfg?.engine && $('#speechEngine')) $('#speechEngine').value = cfg.engine;
+    if (cfg?.model && $('#whisperModel')) $('#whisperModel').value = cfg.model;
+    if (cfg?.aiReviewAfterStop !== undefined) $('#aiReviewAfterStop').checked = Boolean(cfg.aiReviewAfterStop);
+    if (cfg?.keepLiveAlternative !== undefined) $('#keepLiveAlternative').checked = Boolean(cfg.keepLiveAlternative);
+    if (cfg?.learnFromCorrections !== undefined) $('#learnFromCorrections').checked = Boolean(cfg.learnFromCorrections);
+    ['speechEngine','whisperModel','speechDictionary','aiReviewAfterStop','keepLiveAlternative','learnFromCorrections'].forEach(id => $(`#${id}`)?.addEventListener('change', persistAiSettings));
+    $('#speechDictionary')?.addEventListener('input', persistAiSettings);
+  }
+
+  function persistAiSettings() {
+    const next = {
+      engine: $('#speechEngine')?.value || 'smart',
+      model: $('#whisperModel')?.value || 'base-q5_1',
+      dictionary: $('#speechDictionary')?.value || DEFAULT_DICTIONARY,
+      aiReviewAfterStop: $('#aiReviewAfterStop')?.checked !== false,
+      keepLiveAlternative: $('#keepLiveAlternative')?.checked !== false,
+      learnFromCorrections: $('#learnFromCorrections')?.checked !== false,
+    };
+    localStorage.setItem(AI_SETTINGS_KEY, JSON.stringify(next));
+  }
+
+  function applySpeechEnginePreset() {
+    const mode = $('#speechEngine').value;
+    if (mode === 'smart') {
+      $('#autoTranscription').checked = true;
+      $('#aiReviewAfterStop').checked = true;
+    } else if (mode === 'live') {
+      $('#autoTranscription').checked = true;
+      $('#aiReviewAfterStop').checked = false;
+    } else if (mode === 'offline') {
+      $('#autoTranscription').checked = false;
+      $('#localSpeechOnly').checked = true;
+      $('#aiReviewAfterStop').checked = true;
+    }
+    scheduleSave();
+  }
+
+  function buildBiasingText() {
+    const lines = [$('#speechDictionary')?.value || ''];
+    if (state.profile) lines.push(state.profile.grade || '', state.profile.name || '', state.profile.unit || '');
+    lines.push($('#place')?.value || '');
+    const identityFirstLine = ($('#personIdentity')?.value || '').split(/\n/)[0];
+    if (identityFirstLine) lines.push(identityFirstLine);
+    return lines.join('\n').split(/\n+/).map(x => x.trim()).filter(Boolean).slice(0, 120).join('\n');
+  }
+
+  function buildWhisperPrompt() {
+    const words = buildBiasingText().split(/\n+/).filter(Boolean).slice(0, 80);
+    return `Audition de gendarmerie à Madagascar. Langue principale malagasy, avec éventuellement des termes français. Vocabulaire attendu : ${words.join(', ')}`.slice(0, 1100);
+  }
+
+  async function refreshWhisperStatus() {
+    const label = $('#whisperModelStatus');
+    const details = $('#whisperModelDetails');
+    const bar = $('#whisperProgress');
+    if (!label || !details || !bar) return;
+    if (!isNativeAndroid || !NativeWhisper) {
+      label.textContent = 'Whisper local disponible uniquement dans l’APK Android';
+      details.textContent = 'La version navigateur garde la transcription du moteur du téléphone.';
+      bar.style.width = '0%';
+      return;
+    }
+    const modelId = $('#whisperModel').value || 'base-q5_1';
+    try {
+      const st = await NativeWhisper.modelStatus({ modelId });
+      if (st.downloading) {
+        label.textContent = `Téléchargement du modèle IA… ${Number(st.progress || 0)} %`;
+        details.textContent = modelId === 'small-q5_1' ? 'Modèle Small Q5 (~181 MiB)' : 'Modèle Base Q5 (~57 MiB)';
+        bar.style.width = `${Math.max(2, Number(st.progress || 0))}%`;
+      } else if (st.installed) {
+        label.textContent = 'Modèle IA local prêt ✓';
+        details.textContent = `${modelId} • ${(Number(st.sizeBytes || 0)/1024/1024).toFixed(1)} Mo • transcription hors ligne`;
+        bar.style.width = '100%';
+      } else {
+        label.textContent = 'Modèle IA local non installé';
+        details.textContent = modelId === 'small-q5_1' ? 'Small Q5 : plus précis, plus lourd (~181 MiB).' : 'Base Q5 : recommandé pour votre téléphone (~57 MiB).';
+        bar.style.width = '0%';
+      }
+      $('#deleteWhisperBtn').disabled = !st.installed;
+    } catch (error) {
+      label.textContent = 'Diagnostic Whisper impossible';
+      details.textContent = error?.message || String(error);
+      bar.style.width = '0%';
+    }
+  }
+
+  async function downloadWhisperModel() {
+    if (!NativeWhisper) return toast('Moteur Whisper natif indisponible dans cet APK.');
+    const modelId = $('#whisperModel').value || 'base-q5_1';
+    const btn = $('#downloadWhisperBtn');
+    btn.disabled = true;
+    clearInterval(state.whisperPoll);
+    state.whisperPoll = setInterval(() => refreshWhisperStatus().catch(() => {}), 700);
+    try {
+      toast('Téléchargement du modèle IA démarré. Gardez l’application ouverte.');
+      await NativeWhisper.downloadModel({ modelId });
+      toast('Modèle IA local installé.');
+    } catch (error) {
+      toast(error?.message || 'Téléchargement du modèle impossible.');
+    } finally {
+      clearInterval(state.whisperPoll);
+      state.whisperPoll = null;
+      btn.disabled = false;
+      await refreshWhisperStatus();
+    }
+  }
+
+  async function deleteWhisperModel() {
+    if (!NativeWhisper) return;
+    if (!confirm('Supprimer le modèle IA local de ce téléphone ?')) return;
+    const modelId = $('#whisperModel').value || 'base-q5_1';
+    try {
+      await NativeWhisper.deleteModel({ modelId });
+      toast('Modèle IA supprimé.');
+      await refreshWhisperStatus();
+    } catch (error) { toast(error?.message || 'Suppression impossible.'); }
+  }
+
+  function learnCorrectionWords(correctedText, systemText) {
+    if (!$('#learnFromCorrections')?.checked) return 0;
+    const corrected = String(correctedText || '').trim();
+    const system = String(systemText || '').trim();
+    if (!corrected || !system || corrected === system) return 0;
+    const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const tokenRe = /[A-Za-zÀ-ÖØ-öø-ÿ'’\-]{3,}/g;
+    const known = new Set((system.match(tokenRe) || []).map(normalize));
+    const dictionaryLines = ($('#speechDictionary')?.value || '').split(/\n+/).map(x => x.trim()).filter(Boolean);
+    const dictNorm = new Set(dictionaryLines.map(normalize));
+    const additions = [];
+    for (const word of (corrected.match(tokenRe) || [])) {
+      const n = normalize(word);
+      if (!n || known.has(n) || dictNorm.has(n) || additions.some(x => normalize(x) === n)) continue;
+      additions.push(word.replace(/’/g, "'"));
+      if (additions.length >= 8) break;
+    }
+    if (!additions.length) return 0;
+    $('#speechDictionary').value = [...dictionaryLines, ...additions].join('\n');
+    persistAiSettings();
+    return additions.length;
   }
 
   function setDefaultDateTime() {
@@ -156,6 +349,10 @@
       signatureAfter: Boolean(overrides.signatureAfter), questionClipId: overrides.questionClipId || '', answerClipId: overrides.answerClipId || '',
       questionDurationMs: Number(overrides.questionDurationMs || 0), answerDurationMs: Number(overrides.answerDurationMs || 0),
       questionMimeType: overrides.questionMimeType || '', answerMimeType: overrides.answerMimeType || '',
+      questionLiveTranscript: overrides.questionLiveTranscript || '', answerLiveTranscript: overrides.answerLiveTranscript || '',
+      questionAiTranscript: overrides.questionAiTranscript || '', answerAiTranscript: overrides.answerAiTranscript || '',
+      questionAiModel: overrides.questionAiModel || '', answerAiModel: overrides.answerAiModel || '',
+      questionAiElapsedMs: Number(overrides.questionAiElapsedMs || 0), answerAiElapsedMs: Number(overrides.answerAiElapsedMs || 0),
     };
   }
 
@@ -185,8 +382,18 @@
   }
 
   function bindExchangeCard(card, exchange) {
-    $('.question-text', card).addEventListener('input', e => { exchange.question = e.target.value; scheduleSave(); });
-    $('.answer-text', card).addEventListener('input', e => { exchange.answer = e.target.value; scheduleSave(); });
+    const qText = $('.question-text', card);
+    const aText = $('.answer-text', card);
+    qText.addEventListener('input', e => { exchange.question = e.target.value; scheduleSave(); });
+    aText.addEventListener('input', e => { exchange.answer = e.target.value; scheduleSave(); });
+    qText.addEventListener('blur', () => {
+      const learned = learnCorrectionWords(qText.value, exchange.questionAiTranscript || exchange.questionLiveTranscript || '');
+      if (learned) toast(`${learned} mot(s) corrigé(s) ajouté(s) au dictionnaire local.`);
+    });
+    aText.addEventListener('blur', () => {
+      const learned = learnCorrectionWords(aText.value, exchange.answerAiTranscript || exchange.answerLiveTranscript || '');
+      if (learned) toast(`${learned} mot(s) corrigé(s) ajouté(s) au dictionnaire local.`);
+    });
     $('.signature-after', card).addEventListener('change', e => { exchange.signatureAfter = e.target.checked; scheduleSave(); });
     $('.question-record', card).addEventListener('click', () => toggleRecording(exchange, 'question', card));
     $('.answer-record', card).addEventListener('click', () => toggleRecording(exchange, 'answer', card));
@@ -218,19 +425,20 @@
 
   async function startRecording(exchange, kind, card) {
     if (NativeAudioRecorder) return startNativeRecording(exchange, kind, card);
-    if (isNativeAndroid) throw new Error('Pont audio natif indisponible. Réinstallez la beta.6 puis relancez l’application.');
+    if (isNativeAndroid) throw new Error('Pont audio natif indisponible. Réinstallez la v3.1 beta.1 puis relancez l’application.');
     return startWebRecording(exchange, kind, card);
   }
 
   async function startNativeRecording(exchange, kind, card) {
     const button = $(`.${kind}-record`, card);
     const status = $(`.${kind}-status`, card);
-    const transcribe = $('#autoTranscription').checked;
+    const engineMode = $('#speechEngine')?.value || 'smart';
+    const transcribe = $('#autoTranscription').checked && engineMode !== 'offline';
     const language = $('#speechLanguage').value || 'mg-MG';
     const preferOffline = $('#localSpeechOnly').checked;
     const baseText = (kind === 'question' ? exchange.question : exchange.answer).trim();
     status.textContent = transcribe ? 'Ouverture du micro + transcription…' : 'Ouverture du microphone…';
-    const started = await NativeAudioRecorder.startRecording({ language, transcribe, preferOffline });
+    const started = await NativeAudioRecorder.startRecording({ language, transcribe, preferOffline, biasingText: buildBiasingText() });
     if (started?.value === false) throw new Error('Le microphone n’a pas démarré.');
     button.classList.add('recording');
     $('.record-label', button).textContent = 'Arrêter';
@@ -260,7 +468,11 @@
     }
     const status = $(`.${active.kind}-status`, card);
     const s = String(data.status || '');
-    if (!finalPass && s === 'listening') status.textContent = text ? 'Audio + texte en direct…' : 'Audio en cours • écoute de la parole…';
+    if (!finalPass && s === 'listening') {
+      const confidence = Number(data.confidence ?? -1);
+      const confText = confidence >= 0 ? ` • confiance ${Math.round(confidence*100)}%` : '';
+      status.textContent = text ? `Audio + texte en direct…${confText}` : 'Audio en cours • écoute de la parole…';
+    }
     if (!finalPass && s === 'unsupported') status.textContent = 'Audio en cours • transcription non prise en charge par ce moteur Android';
     if (!finalPass && s === 'error') status.textContent = `Audio en cours • transcription indisponible${data.errorMessage ? ` (${data.errorMessage})` : ''}`;
   }
@@ -292,8 +504,12 @@
       player.hidden = false;
       await sleep(700);
       try { await pollNativeTranscript(active, true); } catch (_) {}
+      const textarea = $(`.${kind}-text`, card);
+      const liveText = textarea.value.trim();
+      exchange[`${kind}LiveTranscript`] = liveText;
       status.textContent = `Audio + texte conservés • ${formatDuration(durationMs)}`;
       saveDraft();
+      await maybeReviewWithWhisper({ active, exchange, kind, card, status, audioPath: data.path || '', durationMs, liveText });
     } catch (error) {
       console.error(error);
       status.textContent = 'Échec de l’enregistrement.';
@@ -302,6 +518,41 @@
       button.classList.remove('recording');
       $('.record-label', button).textContent = kind === 'question' ? 'Question' : 'Réponse';
       state.activeRecording = null;
+    }
+  }
+
+  async function maybeReviewWithWhisper({ active, exchange, kind, card, status, audioPath, durationMs, liveText }) {
+    const mode = $('#speechEngine')?.value || 'smart';
+    if (!$('#aiReviewAfterStop')?.checked || mode === 'live' || !isNativeAndroid || !NativeWhisper || !audioPath) return;
+    const modelId = $('#whisperModel')?.value || 'base-q5_1';
+    let modelState = null;
+    try { modelState = await NativeWhisper.modelStatus({ modelId }); } catch (_) {}
+    if (!modelState?.installed) {
+      status.textContent = `Audio + texte conservés • ${formatDuration(durationMs)} • modèle IA non installé`;
+      return;
+    }
+    status.classList.add('ai-processing');
+    status.textContent = `Audio conservé • révision IA Malagasy en cours…`;
+    try {
+      const language = ($('#speechLanguage').value || 'mg-MG').toLowerCase().startsWith('fr') ? 'fr' : 'mg';
+      const ai = await NativeWhisper.transcribe({ audioPath, modelId, language, prompt: buildWhisperPrompt() });
+      const aiText = String(ai?.text || '').trim();
+      if (!aiText) throw new Error('Whisper n’a produit aucun texte.');
+      exchange[`${kind}AiTranscript`] = aiText;
+      exchange[`${kind}AiModel`] = modelId;
+      exchange[`${kind}AiElapsedMs`] = Number(ai?.elapsedMs || 0);
+      const finalText = [active.baseText, aiText].filter(Boolean).join(active.baseText ? ' ' : '').trim();
+      const textarea = $(`.${kind}-text`, card);
+      textarea.value = finalText;
+      if (kind === 'question') exchange.question = finalText; else exchange.answer = finalText;
+      status.textContent = `Audio + texte IA conservés • ${formatDuration(durationMs)} • IA ${(Number(ai?.elapsedMs || 0)/1000).toFixed(1)} s`;
+      saveDraft();
+    } catch (error) {
+      console.warn('Whisper review failed', error);
+      status.textContent = `Audio + texte direct conservés • ${formatDuration(durationMs)} • révision IA indisponible`;
+      if (!liveText) toast(error?.message || 'Révision IA indisponible.');
+    } finally {
+      status.classList.remove('ai-processing');
     }
   }
 
@@ -400,13 +651,20 @@
   async function runNativeDiagnostics() {
     const el = $('#exportStatus');
     if (!NativeAudioRecorder) {
-      el.textContent = 'ERREUR : pont audio natif indisponible. Vérifiez que la beta.6 est bien installée.';
+      el.textContent = 'ERREUR : pont audio natif indisponible. Vérifiez que la v3.1 beta.1 est bien installée.';
       return;
     }
     try {
       const d = await NativeAudioRecorder.diagnostics();
       const speech = d.liveTranscriptionSupported ? 'transcription live prête' : 'transcription live selon moteur Android';
-      el.textContent = `Audio natif prêt • ${speech} • Android ${d.sdk ?? '?'} • ${d.manufacturer ?? ''} ${d.model ?? ''} • micro: ${d.permission ?? 'à demander'} • v${APP_VERSION}`;
+      let whisper = 'Whisper non vérifié';
+      try {
+        if (NativeWhisper) {
+          const ws = await NativeWhisper.modelStatus({ modelId: $('#whisperModel')?.value || 'base-q5_1' });
+          whisper = ws.installed ? 'Whisper local prêt' : 'Whisper à télécharger';
+        }
+      } catch (_) {}
+      el.textContent = `Audio natif prêt • ${speech} • ${whisper} • Android ${d.sdk ?? '?'} • ${d.manufacturer ?? ''} ${d.model ?? ''} • micro: ${d.permission ?? 'à demander'} • v${APP_VERSION}`;
     } catch (error) {
       el.textContent = `Diagnostic audio impossible : ${error?.message || error}`;
     }
@@ -451,6 +709,12 @@
       speechLanguage: $('#speechLanguage').value,
       autoTranscription: $('#autoTranscription').checked,
       localSpeechOnly: $('#localSpeechOnly').checked,
+      speechEngine: $('#speechEngine')?.value || 'smart',
+      whisperModel: $('#whisperModel')?.value || 'base-q5_1',
+      speechDictionary: $('#speechDictionary')?.value || DEFAULT_DICTIONARY,
+      aiReviewAfterStop: $('#aiReviewAfterStop')?.checked !== false,
+      keepLiveAlternative: $('#keepLiveAlternative')?.checked !== false,
+      learnFromCorrections: $('#learnFromCorrections')?.checked !== false,
       personIdentity: $('#personIdentity').value,
       identityVerification: $('#identityVerification').value,
       place: $('#place').value,
@@ -481,6 +745,12 @@
     ids.forEach(id => { if (d[id] !== undefined && $(`#${id}`)) $(`#${id}`).value = d[id]; });
     if (d.autoTranscription !== undefined) $('#autoTranscription').checked = Boolean(d.autoTranscription);
     if (d.localSpeechOnly !== undefined) $('#localSpeechOnly').checked = Boolean(d.localSpeechOnly);
+    if (d.speechEngine && $('#speechEngine')) $('#speechEngine').value = d.speechEngine;
+    if (d.whisperModel && $('#whisperModel')) $('#whisperModel').value = d.whisperModel;
+    if (d.speechDictionary !== undefined && $('#speechDictionary')) $('#speechDictionary').value = d.speechDictionary;
+    if (d.aiReviewAfterStop !== undefined && $('#aiReviewAfterStop')) $('#aiReviewAfterStop').checked = Boolean(d.aiReviewAfterStop);
+    if (d.keepLiveAlternative !== undefined && $('#keepLiveAlternative')) $('#keepLiveAlternative').checked = Boolean(d.keepLiveAlternative);
+    if (d.learnFromCorrections !== undefined && $('#learnFromCorrections')) $('#learnFromCorrections').checked = Boolean(d.learnFromCorrections);
     state.exchanges = Array.isArray(d.exchanges) ? d.exchanges.map(makeExchange) : [];
   }
 
@@ -494,7 +764,8 @@
     try {
       const questions = [];
       for (const exchange of state.exchanges) {
-        const item = { question: exchange.question, answer: exchange.answer, signatureAfter: exchange.signatureAfter };
+        const keepLive = $('#keepLiveAlternative')?.checked !== false;
+        const item = { question: exchange.question, answer: exchange.answer, signatureAfter: exchange.signatureAfter, transcription: { question: { live: keepLive ? (exchange.questionLiveTranscript || '') : '', ai: exchange.questionAiTranscript || '', model: exchange.questionAiModel || '', elapsedMs: exchange.questionAiElapsedMs || 0 }, answer: { live: keepLive ? (exchange.answerLiveTranscript || '') : '', ai: exchange.answerAiTranscript || '', model: exchange.answerAiModel || '', elapsedMs: exchange.answerAiElapsedMs || 0 } } };
         for (const kind of ['question','answer']) {
           const clipId = exchange[`${kind}ClipId`];
           if (!clipId) continue;
@@ -514,7 +785,7 @@
         appVersion: APP_VERSION,
         exportedAt: new Date().toISOString(),
         speechLanguage: $('#speechLanguage').value,
-        speechMode: { automatic: $('#autoTranscription').checked, preferOffline: $('#localSpeechOnly').checked, localOnly: false },
+        speechMode: { automatic: $('#autoTranscription').checked, preferOffline: $('#localSpeechOnly').checked, localOnly: $('#speechEngine')?.value === 'offline', engine: $('#speechEngine')?.value || 'smart', whisperModel: $('#whisperModel')?.value || '', whisperReview: $('#aiReviewAfterStop')?.checked !== false, learnedCorrections: $('#learnFromCorrections')?.checked !== false, vocabulary: buildBiasingText().split(/\n+/).filter(Boolean) },
         investigator: {
           grade: state.profile.grade,
           name: state.profile.name,

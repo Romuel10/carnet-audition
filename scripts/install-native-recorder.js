@@ -90,6 +90,7 @@ public class NativeAudioRecorderPlugin extends Plugin {
     private volatile String transcriptionStatus = "idle";
     private volatile String transcriptionError = "";
     private volatile boolean transcriptionRequested = false;
+    private volatile float transcriptionConfidence = -1.0f;
 
     @PluginMethod
     public void diagnostics(PluginCall call) {
@@ -133,8 +134,10 @@ public class NativeAudioRecorderPlugin extends Plugin {
         transcriptionError = "";
         transcriptionStatus = "idle";
         transcriptionRequested = Boolean.TRUE.equals(call.getBoolean("transcribe", true));
+        transcriptionConfidence = -1.0f;
         final String language = call.getString("language", "mg-MG");
         final boolean preferOffline = Boolean.TRUE.equals(call.getBoolean("preferOffline", true));
+        final String biasingText = call.getString("biasingText", "");
 
         try {
             File dir = new File(getContext().getFilesDir(), "audios");
@@ -163,7 +166,7 @@ public class NativeAudioRecorderPlugin extends Plugin {
             wavOut.write(new byte[44]);
             pcmBytes = 0L;
 
-            if (transcriptionRequested) setupInjectedSpeechRecognition(language, preferOffline);
+            if (transcriptionRequested) setupInjectedSpeechRecognition(language, preferOffline, biasingText);
             else transcriptionStatus = "disabled";
 
             audioRecord.startRecording();
@@ -188,7 +191,7 @@ public class NativeAudioRecorderPlugin extends Plugin {
         }
     }
 
-    private void setupInjectedSpeechRecognition(String language, boolean preferOffline) {
+    private void setupInjectedSpeechRecognition(String language, boolean preferOffline, String biasingText) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || !SpeechRecognizer.isRecognitionAvailable(getContext())) {
             transcriptionStatus = "unsupported";
             transcriptionError = "Reconnaissance vocale injectée non disponible sur cet Android.";
@@ -215,6 +218,7 @@ public class NativeAudioRecorderPlugin extends Plugin {
                             transcriptionError = speechErrorMessage(error);
                         }
                         @Override public void onResults(Bundle results) {
+                            updateConfidence(results);
                             String text = bestText(results);
                             if (!text.isEmpty()) {
                                 finalTranscript = mergeTranscript(finalTranscript, text);
@@ -223,12 +227,14 @@ public class NativeAudioRecorderPlugin extends Plugin {
                             transcriptionStatus = recording ? "listening" : "done";
                         }
                         @Override public void onPartialResults(Bundle partialResults) {
+                            updateConfidence(partialResults);
                             String text = bestText(partialResults);
                             if (!text.isEmpty()) transcript = mergeForPartial(finalTranscript, text);
                             transcriptionStatus = "listening";
                         }
                         @Override public void onEvent(int eventType, Bundle params) {}
                         @Override public void onSegmentResults(Bundle segmentResults) {
+                            updateConfidence(segmentResults);
                             String text = bestText(segmentResults);
                             if (!text.isEmpty()) {
                                 finalTranscript = mergeTranscript(finalTranscript, text);
@@ -248,7 +254,17 @@ public class NativeAudioRecorderPlugin extends Plugin {
                     intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, language);
                     intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
                     intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, preferOffline);
-                    intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
+                    intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
+                    intent.putExtra(RecognizerIntent.EXTRA_ENABLE_FORMATTING, RecognizerIntent.FORMATTING_OPTIMIZE_LATENCY);
+                    if (biasingText != null && !biasingText.trim().isEmpty()) {
+                        ArrayList<String> hints = new ArrayList<>();
+                        for (String line : biasingText.split("\\\\r?\\\\n")) {
+                            String hint = line == null ? "" : line.trim();
+                            if (!hint.isEmpty() && hint.length() <= 80) hints.add(hint);
+                            if (hints.size() >= 120) break;
+                        }
+                        if (!hints.isEmpty()) intent.putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, hints);
+                    }
                     intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, speechReadFd);
                     intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1);
                     intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT);
@@ -310,6 +326,7 @@ public class NativeAudioRecorderPlugin extends Plugin {
         ret.put("finalText", finalTranscript);
         ret.put("errorMessage", transcriptionError);
         ret.put("requested", transcriptionRequested);
+        ret.put("confidence", transcriptionConfidence);
         call.resolve(ret);
     }
 
@@ -428,6 +445,14 @@ public class NativeAudioRecorderPlugin extends Plugin {
         String safe = name.replaceAll("[^a-zA-Z0-9._-]", "-");
         if (!safe.toLowerCase().endsWith(".pvaud")) safe += ".pvaud";
         return safe.length() > 120 ? safe.substring(0, 114) + ".pvaud" : safe;
+    }
+
+    private void updateConfidence(Bundle bundle) {
+        if (bundle == null) return;
+        try {
+            float[] scores = bundle.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES);
+            if (scores != null && scores.length > 0) transcriptionConfidence = scores[0];
+        } catch (Exception ignored) {}
     }
 
     private String bestText(Bundle bundle) {

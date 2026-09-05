@@ -16,7 +16,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          
+
       - name: Setup Java
         uses: actions/setup-java@v5
         with:
@@ -26,11 +26,29 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Install NDK and CMake
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "ndk;25.2.9519653" "cmake;3.22.1"
+
       - name: Install dependencies
         run: npm install
 
+      - name: Fetch whisper.cpp
+        run: |
+          mkdir -p vendor
+          git clone --depth 1 --branch v1.9.1 https://github.com/ggml-org/whisper.cpp.git vendor/whisper.cpp
+
       - name: Create Android project
         run: npm run android:add
+
+      - name: Verify native integration
+        run: |
+          test -f android/app/src/main/java/mg/assistantpv/carnet/NativeAudioRecorderPlugin.java
+          test -f android/app/src/main/java/mg/assistantpv/carnet/NativeWhisperPlugin.java
+          test -f android/app/src/main/jni/whisper/CMakeLists.txt
+          grep -n "NativeWhisperPlugin" android/app/src/main/java/mg/assistantpv/carnet/MainActivity.java
+          grep -n "src/main/jni/whisper/CMakeLists.txt" android/app/build.gradle
 
       - name: Build debug APK
         working-directory: android
@@ -39,5 +57,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Carnet-audition-debug-apk
+          name: Carnet-audition-v3.1-beta1-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
