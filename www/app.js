@@ -1,9 +1,12 @@
 (() => {
-  const APP_VERSION = '3.0.0-beta.1';
+  const APP_VERSION = '3.0.0-beta.2';
   const STORAGE_KEY = 'assistant-pv-carnet-draft-v1';
   const DB_NAME = 'assistant-pv-carnet-audio';
   const DB_VERSION = 1;
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+  const CapacitorRuntime = window.Capacitor || null;
+  const isNativeAndroid = CapacitorRuntime?.getPlatform?.() === 'android';
+  const NativeVoiceRecorder = isNativeAndroid && CapacitorRuntime?.registerPlugin ? CapacitorRuntime.registerPlugin('VoiceRecorder') : null;
   const state = { exchanges: [], activeRecording: null, stream: null, saveTimer: null };
   const $ = (s, root = document) => root.querySelector(s);
   const $$ = (s, root = document) => [...root.querySelectorAll(s)];
@@ -84,6 +87,69 @@
   }
 
   async function startRecording(exchange, kind, card) {
+    if (NativeVoiceRecorder) return startNativeRecording(exchange, kind, card);
+    return startWebRecording(exchange, kind, card);
+  }
+
+  async function startNativeRecording(exchange, kind, card) {
+    const button = $(`.${kind}-record`, card);
+    const status = $(`.${kind}-status`, card);
+
+    let permission = null;
+    try { permission = await NativeVoiceRecorder.hasAudioRecordingPermission(); } catch (_) {}
+    if (!permission?.value) {
+      const requested = await NativeVoiceRecorder.requestAudioRecordingPermission();
+      if (!requested?.value) throw new Error('Autorisation du microphone refusée.');
+    }
+
+    const capability = await NativeVoiceRecorder.canDeviceVoiceRecord();
+    if (!capability?.value) throw new Error('Ce téléphone ne permet pas l’enregistrement audio.');
+
+    await NativeVoiceRecorder.startRecording();
+    button.classList.add('recording');
+    $('.record-label', button).textContent = 'Arrêter';
+    status.textContent = 'Enregistrement natif en cours…';
+    state.activeRecording = { exchangeId: exchange.id, kind, native: true, card, startedAt: Date.now() };
+  }
+
+  async function stopNativeRecording(active) {
+    const { exchangeId, kind, card } = active;
+    const exchange = state.exchanges.find(x => x.id === exchangeId);
+    const button = $(`.${kind}-record`, card);
+    const status = $(`.${kind}-status`, card);
+    try {
+      status.textContent = 'Enregistrement terminé • sauvegarde…';
+      const result = await NativeVoiceRecorder.stopRecording();
+      const data = result?.value || result || {};
+      const base64 = data.recordDataBase64 || '';
+      if (!base64) throw new Error('Aucune donnée audio reçue.');
+      const mimeType = data.mimeType || 'audio/aac';
+      const blob = base64ToBlob(base64, mimeType);
+      const durationMs = Number(data.msDuration || (Date.now() - active.startedAt) || 0);
+      const clipId = `${exchange.id}-${kind}-${uid()}`;
+      await putClip(clipId, blob);
+      const oldClip = kind === 'question' ? exchange.questionClipId : exchange.answerClipId;
+      if (oldClip) await deleteClip(oldClip);
+      exchange[`${kind}ClipId`] = clipId;
+      exchange[`${kind}DurationMs`] = durationMs;
+      exchange[`${kind}MimeType`] = mimeType;
+      status.textContent = `Audio conservé • ${formatDuration(durationMs)}`;
+      const player = $(`.${kind}-player`, card);
+      player.src = URL.createObjectURL(blob);
+      player.hidden = false;
+      saveDraft();
+    } catch (error) {
+      console.error(error);
+      status.textContent = 'Échec de l’enregistrement.';
+      toast(error?.message || 'L’audio n’a pas pu être conservé.');
+    } finally {
+      button.classList.remove('recording');
+      $('.record-label', button).textContent = kind === 'question' ? 'Question' : 'Réponse';
+      state.activeRecording = null;
+    }
+  }
+
+  async function startWebRecording(exchange, kind, card) {
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') throw new Error('Ce navigateur ne permet pas l’enregistrement audio. Utilisez Chrome récent ou l’APK.');
     if (!state.stream) state.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
     const mimeCandidates = ['audio/webm;codecs=opus','audio/webm','audio/mp4'];
@@ -130,12 +196,26 @@
       } catch (error) { console.error(error); toast('L’audio n’a pas pu être conservé.'); }
       finally { state.activeRecording = null; }
     };
-    state.activeRecording = { exchangeId: exchange.id, kind, recorder, recognition, card }; recorder.start(500);
+    state.activeRecording = { exchangeId: exchange.id, kind, recorder, recognition, card, native: false }; recorder.start(500);
   }
 
-  function stopActiveRecording() { const rec = state.activeRecording?.recorder; if (rec && rec.state !== 'inactive') rec.stop(); }
+  function stopActiveRecording() {
+    const active = state.activeRecording;
+    if (!active) return;
+    if (active.native) { stopNativeRecording(active); return; }
+    const rec = active.recorder;
+    if (rec && rec.state !== 'inactive') rec.stop();
+  }
+
+  function base64ToBlob(base64, mimeType) {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new Blob([bytes], { type: mimeType || 'application/octet-stream' });
+  }
 
   function updateSpeechSupportMessage() {
+    if (isNativeAndroid) { $('#exportStatus').textContent = 'APK Android : enregistrement natif activé pour une meilleure stabilité. La transcription automatique simultanée est désactivée pendant l’enregistrement natif dans cette beta.'; return; }
     if (!SpeechRecognition) $('#exportStatus').textContent = 'Transcription automatique non disponible sur ce navigateur : l’audio reste enregistré et le texte peut être saisi/corrigé manuellement.';
     else if (!('processLocally' in SpeechRecognition.prototype)) $('#exportStatus').textContent = 'Le navigateur propose la reconnaissance vocale, mais ne garantit pas un traitement local. Le mode « local uniquement » empêchera son utilisation tant qu’un moteur local n’est pas disponible.';
   }
