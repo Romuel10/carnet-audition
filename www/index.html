@@ -15,30 +15,48 @@
   <header class="app-header">
     <div class="brand-row">
       <img src="icon.png" alt="" class="app-icon" />
-      <div><span class="kicker">ASSISTANT PV GENDARMERIE</span><h1>Carnet d’audition <small style="font-size:.38em;opacity:.8;white-space:nowrap">v3 beta.5</small></h1></div>
+      <div><span class="kicker">ASSISTANT PV GENDARMERIE</span><h1>Carnet d’audition <small style="font-size:.38em;opacity:.8;white-space:nowrap">v3 beta.6</small></h1></div>
     </div>
     <span id="saveState" class="save-state">Brouillon local</span>
   </header>
 
   <main class="page">
     <section class="notice">
-      <strong>Audio original conservé</strong>
-      <p>Appuyez sur Question ou Réponse, parlez, puis arrêtez. Cette beta utilise un enregistreur Android natif intégré, sans plugin audio tiers. La transcription automatique est proposée si le téléphone la prend en charge. Vérifiez toujours le texte avant l’export.</p>
+      <strong>Audio + texte en direct</strong>
+      <p>Quand vous appuyez sur Question ou Réponse, l’audio original est enregistré et le texte reconnu s’affiche au fur et à mesure. Relisez et corrigez toujours la transcription avant l’enregistrement du fichier d’audition.</p>
+    </section>
+
+    <section class="card profile-card">
+      <div class="section-title with-action">
+        <span>👤</span>
+        <div><h2>Mon profil enquêteur</h2><p>Enregistré sur ce téléphone : vous ne le saisissez qu’une fois.</p></div>
+        <button id="editProfileBtn" class="btn secondary" type="button">Modifier</button>
+      </div>
+      <div id="profileSummary" class="profile-summary"></div>
+      <div id="profileEditor" class="profile-editor" hidden>
+        <div class="grid two">
+          <label>Grade<input id="investigatorGrade" placeholder="Ex. Gendarme" /></label>
+          <label>Nom et prénoms<input id="investigatorName" placeholder="Ex. RATOVOSON ..." /></label>
+          <label>Qualité<select id="investigatorQuality"><option>APJ</option><option>OPJ</option><option>Autre</option></select></label>
+          <label>Fonction<input id="investigatorFunction" placeholder="Ex. Enquêteur" /></label>
+          <label class="span-2">Unité / Brigade<input id="investigatorUnit" placeholder="Ex. Brigade territoriale de ..." /></label>
+        </div>
+        <div class="profile-actions">
+          <button id="saveProfileBtn" class="btn primary" type="button">Enregistrer mon profil</button>
+          <button id="cancelProfileBtn" class="btn ghost" type="button">Annuler</button>
+        </div>
+      </div>
     </section>
 
     <section class="card identity-card">
       <div class="section-title"><span>1</span><div><h2>Contexte de l’audition</h2><p>Ces informations seront importées dans le PV sur le PC.</p></div></div>
       <div class="grid two">
-        <label>Grade de l’enquêteur<input id="investigatorGrade" placeholder="Ex. Gendarme" /></label>
-        <label>Nom et prénoms de l’enquêteur<input id="investigatorName" placeholder="Ex. RATOVOSON ..." /></label>
-        <label>Qualité<select id="investigatorQuality"><option>APJ</option><option>OPJ</option><option>Autre</option></select></label>
-        <label>Fonction<input id="investigatorFunction" placeholder="Facultatif" /></label>
         <label>Qualité de la personne<select id="personRole"><option>Victime</option><option>Témoin</option><option>Auteur présumé</option><option>Personne soupçonnée</option><option>Personne mise en cause</option><option selected>Personne entendue</option><option>Autre</option></select></label>
         <label>Langue de reconnaissance<select id="speechLanguage"><option value="mg-MG" selected>Malagasy (mg-MG)</option><option value="fr-FR">Français (fr-FR)</option></select></label>
         <div class="span-2 speech-privacy-options">
-          <label class="toggle-row"><input id="autoTranscription" type="checkbox" checked /> Tenter la transcription automatique pendant l’enregistrement</label>
-          <label class="toggle-row"><input id="localSpeechOnly" type="checkbox" checked /> Exiger un moteur vocal local / sur l’appareil quand le navigateur le permet <strong>(recommandé)</strong></label>
-          <small>Si le mode local n’est pas pris en charge, l’audio reste enregistré mais la transcription automatique est désactivée. Décochez ce mode uniquement si l’utilisation d’un service vocal du téléphone est autorisée.</small>
+          <label class="toggle-row"><input id="autoTranscription" type="checkbox" checked /> Transcription en direct pendant l’enregistrement</label>
+          <label class="toggle-row"><input id="localSpeechOnly" type="checkbox" checked /> Privilégier la reconnaissance hors ligne / sur l’appareil quand elle est disponible</label>
+          <small>Le texte apparaît progressivement pendant que la personne parle. Selon le moteur vocal installé sur Android, la reconnaissance peut nécessiter Internet même si le mode hors ligne est privilégié. Désactivez la transcription en direct si l’usage d’un service vocal distant n’est pas autorisé.</small>
         </div>
         <label class="span-2">Identité complète de la personne<textarea id="personIdentity" rows="5" placeholder="Nom, prénoms, naissance, filiation, profession, domicile, CIN..."></textarea></label>
         <label class="span-2">Vérification / pièce d’identité<textarea id="identityVerification" rows="2" placeholder="CIN n°..., délivrée le... à..."></textarea></label>
@@ -48,7 +66,7 @@
     </section>
 
     <section class="card exchanges-card">
-      <div class="section-title with-action"><span>2</span><div><h2>Questions et réponses</h2><p>Chaque échange peut avoir son propre audio.</p></div><button id="addExchangeBtn" class="btn secondary" type="button">+ Ajouter</button></div>
+      <div class="section-title with-action"><span>2</span><div><h2>Questions et réponses</h2><p>Chaque échange conserve son audio et sa transcription.</p></div><button id="addExchangeBtn" class="btn secondary" type="button">+ Ajouter</button></div>
       <div id="exchanges" class="exchanges"></div>
     </section>
 
@@ -62,8 +80,8 @@
     </section>
 
     <section class="export-card card">
-      <div><h2>Transférer vers le PC</h2><p>Le fichier <code>.pvaud</code> contient le texte et les audios. Transférez-le de préférence par câble USB ou moyen local autorisé.</p></div>
-      <div class="export-actions"><button id="exportBtn" class="btn primary large" type="button">Exporter l’audition</button><button id="newBtn" class="btn ghost" type="button">Nouvelle audition</button></div>
+      <div><h2>Enregistrer l’audition comme fichier</h2><p>Le fichier <code>.pvaud</code> contient le texte, le profil de l’enquêteur et tous les audios. Il est prêt à être importé dans Assistant PV Gendarmerie sur le PC.</p></div>
+      <div class="export-actions"><button id="exportBtn" class="btn primary large" type="button">💾 Enregistrer l’audition (.pvaud)</button><button id="newBtn" class="btn ghost" type="button">Nouvelle audition</button></div>
       <div id="exportStatus" class="export-status"></div>
     </section>
   </main>
@@ -72,11 +90,11 @@
     <article class="exchange-card" data-exchange-id="">
       <div class="exchange-head"><strong class="exchange-number">Échange</strong><button class="icon-btn remove-exchange" type="button" title="Supprimer">×</button></div>
       <div class="speech-block">
-        <label>FANONTANIANA<textarea class="question-text" rows="3" placeholder="La question apparaîtra ici ou peut être saisie manuellement."></textarea></label>
+        <label>FANONTANIANA<textarea class="question-text" rows="3" placeholder="La question se transforme en texte ici pendant que vous parlez. Vous pouvez ensuite la corriger."></textarea></label>
         <div class="record-row"><button class="record-btn question-record" type="button"><span class="mic">●</span><span class="record-label">Question</span></button><span class="clip-status question-status">Aucun audio</span><audio class="question-player" controls hidden></audio></div>
       </div>
       <div class="speech-block answer-block">
-        <label>VALINY<textarea class="answer-text" rows="5" placeholder="La réponse apparaîtra ici ou peut être corrigée manuellement."></textarea></label>
+        <label>VALINY<textarea class="answer-text" rows="5" placeholder="La réponse se transforme en texte ici pendant que la personne parle. Vous pouvez ensuite la corriger."></textarea></label>
         <div class="record-row"><button class="record-btn answer-record" type="button"><span class="mic">●</span><span class="record-label">Réponse</span></button><span class="clip-status answer-status">Aucun audio</span><audio class="answer-player" controls hidden></audio></div>
       </div>
       <label class="signature-row"><input class="signature-after" type="checkbox" /> Prévoir une signature après cet échange</label>

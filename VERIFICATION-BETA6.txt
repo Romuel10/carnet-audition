@@ -1,0 +1,23 @@
+Carnet d'audition v3.0.0-beta.6
+
+Fonctions ajoutées :
+- profil enquêteur persistant avec bouton Modifier ;
+- grade, nom/prénoms, qualité, fonction, unité ;
+- transcription en direct pendant l'enregistrement sur Android API 33+ via un seul flux microphone ;
+- audio WAV original conservé en parallèle ;
+- choix Malagasy mg-MG / Français fr-FR ;
+- préférence hors ligne transmise au moteur Android ;
+- bouton « Enregistrer l'audition (.pvaud) » ;
+- sauvegarde native Android dans Téléchargements/AssistantPV ;
+- format .pvaud compatible avec l'import Assistant PV Gendarmerie v3 beta1.
+
+Contrôles réalisés :
+- syntaxe www/app.js : OK ;
+- syntaxe scripts/install-native-recorder.js : OK ;
+- JSON package/capacitor : OK ;
+- aucun id HTML dupliqué ;
+- schéma d'export conservé : mg.assistantpv.audition/1 ;
+- MIME audio/wav pris en charge par l'import PC existant.
+
+Test matériel requis :
+Le moteur SpeechRecognizer installé sur le téléphone doit accepter EXTRA_AUDIO_SOURCE (Android 13/API 33+) et la langue demandée. Si la transcription n'est pas disponible, l'audio continue à être enregistré.
