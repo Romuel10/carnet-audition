@@ -1,0 +1,18 @@
+{
+  "name": "carnet-audition-assistant-pv",
+  "version": "3.0.0-beta.1",
+  "private": true,
+  "description": "Carnet d'audition mobile hors ligne, compatible PWA et prêt à être encapsulé avec Capacitor.",
+  "scripts": {
+    "android:add": "npx cap add android && node scripts/ensure-android-permissions.js",
+    "android:sync": "npx cap sync android && node scripts/ensure-android-permissions.js",
+    "android:open": "npm run android:sync && npx cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.5.1",
+    "@capacitor/core": "8.5.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.1"
+  }
+}

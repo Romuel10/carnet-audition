@@ -1,0 +1,9 @@
+{
+  "name": "Carnet d’audition — Assistant PV",
+  "short_name": "Carnet PV",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f3f5f1",
+  "theme_color": "#174c3a",
+  "icons": [{"src":"icon.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}]
+}
