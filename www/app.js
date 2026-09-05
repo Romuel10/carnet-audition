@@ -1,12 +1,12 @@
 (() => {
-  const APP_VERSION = '3.0.0-beta.2';
+  const APP_VERSION = '3.0.0-beta.3';
   const STORAGE_KEY = 'assistant-pv-carnet-draft-v1';
   const DB_NAME = 'assistant-pv-carnet-audio';
   const DB_VERSION = 1;
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition || null;
   const CapacitorRuntime = window.Capacitor || null;
   const isNativeAndroid = CapacitorRuntime?.getPlatform?.() === 'android';
-  const NativeVoiceRecorder = isNativeAndroid && CapacitorRuntime?.registerPlugin ? CapacitorRuntime.registerPlugin('VoiceRecorder') : null;
+  const NativeAudioRecorder = isNativeAndroid && CapacitorRuntime?.registerPlugin ? CapacitorRuntime.registerPlugin('NativeAudioRecorder') : null;
   const state = { exchanges: [], activeRecording: null, stream: null, saveTimer: null };
   const $ = (s, root = document) => root.querySelector(s);
   const $$ = (s, root = document) => [...root.querySelectorAll(s)];
@@ -83,29 +83,21 @@
       else toast('Un autre enregistrement est déjà en cours.');
       return;
     }
-    try { await startRecording(exchange, kind, card); } catch (error) { console.error(error); toast(error.message || 'Microphone indisponible.'); }
+    try { await startRecording(exchange, kind, card); } catch (error) { console.error(error); const code = error?.code ? ` [${error.code}]` : ''; toast(`${error?.message || 'Microphone indisponible.'}${code}`); rememberRuntimeError('Microphone', error); }
   }
 
   async function startRecording(exchange, kind, card) {
-    if (NativeVoiceRecorder) return startNativeRecording(exchange, kind, card);
+    if (NativeAudioRecorder) return startNativeRecording(exchange, kind, card);
+    if (isNativeAndroid) throw new Error('Enregistreur Android natif absent de cet APK. Réinstallez la beta.3.');
     return startWebRecording(exchange, kind, card);
   }
 
   async function startNativeRecording(exchange, kind, card) {
     const button = $(`.${kind}-record`, card);
     const status = $(`.${kind}-status`, card);
-
-    let permission = null;
-    try { permission = await NativeVoiceRecorder.hasAudioRecordingPermission(); } catch (_) {}
-    if (!permission?.value) {
-      const requested = await NativeVoiceRecorder.requestAudioRecordingPermission();
-      if (!requested?.value) throw new Error('Autorisation du microphone refusée.');
-    }
-
-    const capability = await NativeVoiceRecorder.canDeviceVoiceRecord();
-    if (!capability?.value) throw new Error('Ce téléphone ne permet pas l’enregistrement audio.');
-
-    await NativeVoiceRecorder.startRecording();
+    status.textContent = 'Ouverture du microphone…';
+    const started = await NativeAudioRecorder.startRecording();
+    if (started?.value === false) throw new Error('Le microphone n’a pas démarré.');
     button.classList.add('recording');
     $('.record-label', button).textContent = 'Arrêter';
     status.textContent = 'Enregistrement natif en cours…';
@@ -119,7 +111,7 @@
     const status = $(`.${kind}-status`, card);
     try {
       status.textContent = 'Enregistrement terminé • sauvegarde…';
-      const result = await NativeVoiceRecorder.stopRecording();
+      const result = await NativeAudioRecorder.stopRecording();
       const data = result?.value || result || {};
       const base64 = data.recordDataBase64 || '';
       if (!base64) throw new Error('Aucune donnée audio reçue.');
@@ -215,10 +207,33 @@
   }
 
   function updateSpeechSupportMessage() {
-    if (isNativeAndroid) { $('#exportStatus').textContent = 'APK Android : enregistrement natif activé pour une meilleure stabilité. La transcription automatique simultanée est désactivée pendant l’enregistrement natif dans cette beta.'; return; }
+    if (isNativeAndroid) { runNativeDiagnostics(); return; }
     if (!SpeechRecognition) $('#exportStatus').textContent = 'Transcription automatique non disponible sur ce navigateur : l’audio reste enregistré et le texte peut être saisi/corrigé manuellement.';
     else if (!('processLocally' in SpeechRecognition.prototype)) $('#exportStatus').textContent = 'Le navigateur propose la reconnaissance vocale, mais ne garantit pas un traitement local. Le mode « local uniquement » empêchera son utilisation tant qu’un moteur local n’est pas disponible.';
   }
+
+  async function runNativeDiagnostics() {
+    const el = $('#exportStatus');
+    if (!NativeAudioRecorder) {
+      el.textContent = 'ERREUR : module audio natif absent. Cette installation n’est pas la beta.3 complète.';
+      return;
+    }
+    try {
+      const d = await NativeAudioRecorder.diagnostics();
+      el.textContent = `Audio natif prêt • Android ${d.sdk ?? '?'} • ${d.manufacturer ?? ''} ${d.model ?? ''} • micro: ${d.permission ?? 'à demander'} • v${APP_VERSION}`;
+    } catch (error) {
+      el.textContent = `Diagnostic audio impossible : ${error?.message || error}`;
+    }
+  }
+
+  function rememberRuntimeError(label, error) {
+    const message = `${label}: ${error?.message || error || 'erreur inconnue'}`;
+    try { localStorage.setItem('assistant-pv-carnet-last-error', `${new Date().toISOString()} ${message}`); } catch (_) {}
+    console.error(message, error);
+  }
+
+  window.addEventListener('error', event => rememberRuntimeError('JS', event.error || event.message));
+  window.addEventListener('unhandledrejection', event => rememberRuntimeError('Promise', event.reason));
 
   async function hydratePlayer(exchange, kind) {
     const clipId = exchange[`${kind}ClipId`]; if (!clipId) return; const blob = await getClip(clipId); const card = document.querySelector(`[data-exchange-id="${CSS.escape(exchange.id)}"]`); if (!blob || !card) return;
