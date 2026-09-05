@@ -118,7 +118,7 @@ public class NativeAudioRecorderPlugin extends Plugin {
             ret.put("value", true);
             ret.put("path", currentFile.getAbsolutePath());
             call.resolve(ret);
-        } catch (Throwable error) {
+         } catch (Exception error) {
             safeRelease();
             if (currentFile != null && currentFile.exists()) currentFile.delete();
             call.reject("Démarrage du microphone impossible : " + safeMessage(error), "FAILED_TO_RECORD", error);
@@ -156,7 +156,7 @@ public class NativeAudioRecorderPlugin extends Plugin {
             JSObject ret = new JSObject();
             ret.put("value", value);
             call.resolve(ret);
-        } catch (Throwable error) {
+         } catch (Exception error) {
             safeRelease();
             recording = false;
             if (file != null && file.exists() && file.length() < 1024L) file.delete();

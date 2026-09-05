@@ -1,5 +1,5 @@
 (() => {
-  const APP_VERSION = '3.0.0-beta.3';
+  const APP_VERSION = '3.0.0-beta.4';
   const STORAGE_KEY = 'assistant-pv-carnet-draft-v1';
   const DB_NAME = 'assistant-pv-carnet-audio';
   const DB_VERSION = 1;
@@ -88,7 +88,7 @@
 
   async function startRecording(exchange, kind, card) {
     if (NativeAudioRecorder) return startNativeRecording(exchange, kind, card);
-    if (isNativeAndroid) throw new Error('Enregistreur Android natif absent de cet APK. Réinstallez la beta.3.');
+    if (isNativeAndroid) throw new Error('Enregistreur Android natif absent de cet APK. Réinstallez la beta.4.');
     return startWebRecording(exchange, kind, card);
   }
 
@@ -215,7 +215,7 @@
   async function runNativeDiagnostics() {
     const el = $('#exportStatus');
     if (!NativeAudioRecorder) {
-      el.textContent = 'ERREUR : module audio natif absent. Cette installation n’est pas la beta.3 complète.';
+      el.textContent = 'ERREUR : module audio natif absent. Cette installation n’est pas la beta.4 complète.';
       return;
     }
     try {

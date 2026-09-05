@@ -1,8 +1,8 @@
 {
   "name": "carnet-audition-assistant-pv",
-  "version": "3.0.0-beta.3",
+  "version": "3.0.0-beta.4",
   "private": true,
-  "description": "Carnet d'audition mobile hors ligne avec enregistreur Android natif intégré, sans plugin audio tiers.",
+  "description": "Carnet d'audition mobile hors ligne avec enregistreur Android natif intégré, sans plugin audio tiers. Correctif compilation Java beta.4.",
   "scripts": {
     "android:add": "npx cap add android && node scripts/install-native-recorder.js",
     "android:sync": "npx cap sync android && node scripts/install-native-recorder.js",
