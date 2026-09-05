@@ -1,6 +1,6 @@
 {
   "name": "carnet-audition-assistant-pv",
-  "version": "3.1.0-beta.1",
+  "version": "3.1.0-beta.2",
   "private": true,
   "description": "Carnet d'audition mobile avec profil enquêteur persistant, audio natif, dictée intelligente Malagasy en direct, dictionnaire contextuel, révision IA Whisper hors ligne et export .pvaud vers le PC.",
   "scripts": {

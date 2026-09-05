@@ -466,21 +466,42 @@ project(assistantpv_whisper)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(WHISPER_LIB_DIR "\${CMAKE_SOURCE_DIR}/../../../../../../vendor/whisper.cpp")
-set(SOURCE_FILES "\${WHISPER_LIB_DIR}/src/whisper.cpp" "\${CMAKE_SOURCE_DIR}/jni.c")
+
+# Le workflow clone explicitement whisper.cpp v1.9.1.
+# src/whisper.cpp utilise la macro WHISPER_VERSION ; elle doit donc être
+# définie ici quand la source est compilée dans notre bibliothèque JNI.
+set(WHISPER_VERSION "1.9.1")
+
+set(SOURCE_FILES
+    "\${WHISPER_LIB_DIR}/src/whisper.cpp"
+    "\${CMAKE_SOURCE_DIR}/jni.c"
+)
+
 find_library(LOG_LIB log)
 include(FetchContent)
-add_library(assistantpv_whisper SHARED ${'${SOURCE_FILES}'})
-FetchContent_Declare(ggml SOURCE_DIR ${'${WHISPER_LIB_DIR}'}/ggml)
+FetchContent_Declare(ggml SOURCE_DIR "\${WHISPER_LIB_DIR}/ggml")
 FetchContent_MakeAvailable(ggml)
+
+add_library(assistantpv_whisper SHARED ${'${SOURCE_FILES}'})
 target_link_libraries(assistantpv_whisper PRIVATE ${'${LOG_LIB}'} android ggml)
 target_compile_definitions(assistantpv_whisper PUBLIC GGML_USE_CPU)
-target_compile_options(assistantpv_whisper PRIVATE -O3 -fvisibility=hidden -fvisibility-inlines-hidden)
-include_directories(${'${WHISPER_LIB_DIR}'})
-include_directories(${'${WHISPER_LIB_DIR}'}/src)
-include_directories(${'${WHISPER_LIB_DIR}'}/include)
-include_directories(${'${WHISPER_LIB_DIR}'}/ggml/include)
-include_directories(${'${WHISPER_LIB_DIR}'}/ggml/src)
-include_directories(${'${WHISPER_LIB_DIR}'}/ggml/src/ggml-cpu)
+target_compile_definitions(assistantpv_whisper PRIVATE WHISPER_VERSION=\\"1.9.1\\")
+target_compile_options(assistantpv_whisper PRIVATE
+    -O3
+    -fvisibility=hidden
+    -fvisibility-inlines-hidden
+    -ffunction-sections
+    -fdata-sections
+)
+
+target_include_directories(assistantpv_whisper PRIVATE
+    "\${WHISPER_LIB_DIR}"
+    "\${WHISPER_LIB_DIR}/src"
+    "\${WHISPER_LIB_DIR}/include"
+    "\${WHISPER_LIB_DIR}/ggml/include"
+    "\${WHISPER_LIB_DIR}/ggml/src"
+    "\${WHISPER_LIB_DIR}/ggml/src/ggml-cpu"
+)
 `;
 fs.writeFileSync(path.join(jniDir, 'CMakeLists.txt'), cmake);
 

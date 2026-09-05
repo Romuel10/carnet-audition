@@ -1,5 +1,5 @@
 (() => {
-  const APP_VERSION = '3.1.0-beta.1';
+  const APP_VERSION = '3.1.0-beta.2';
   const STORAGE_KEY = 'assistant-pv-carnet-draft-v1';
   const PROFILE_KEY = 'assistant-pv-carnet-investigator-profile-v1';
   const AI_SETTINGS_KEY = 'assistant-pv-carnet-ai-settings-v1';
@@ -425,7 +425,7 @@ Madagasikara`;
 
   async function startRecording(exchange, kind, card) {
     if (NativeAudioRecorder) return startNativeRecording(exchange, kind, card);
-    if (isNativeAndroid) throw new Error('Pont audio natif indisponible. Réinstallez la v3.1 beta.1 puis relancez l’application.');
+    if (isNativeAndroid) throw new Error('Pont audio natif indisponible. Réinstallez la v3.1 beta.2 puis relancez l’application.');
     return startWebRecording(exchange, kind, card);
   }
 
@@ -651,7 +651,7 @@ Madagasikara`;
   async function runNativeDiagnostics() {
     const el = $('#exportStatus');
     if (!NativeAudioRecorder) {
-      el.textContent = 'ERREUR : pont audio natif indisponible. Vérifiez que la v3.1 beta.1 est bien installée.';
+      el.textContent = 'ERREUR : pont audio natif indisponible. Vérifiez que la v3.1 beta.2 est bien installée.';
       return;
     }
     try {

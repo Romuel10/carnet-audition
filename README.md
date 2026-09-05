@@ -1,6 +1,10 @@
-# Carnet d’audition — Assistant PV Gendarmerie v3.1.0-beta.1
+# Carnet d’audition — Assistant PV Gendarmerie v3.1.0-beta.2
 
 Cette version transforme la beta.6 en **dictée hybride Malagasy** : le texte apparaît pendant la parole grâce au moteur vocal Android, puis l’audio original peut être relu localement par Whisper pour améliorer le texte final.
+
+### Correctif beta.2
+- Correction de la compilation native `whisper.cpp v1.9.1` : la macro `WHISPER_VERSION`, utilisée directement par `src/whisper.cpp`, est maintenant définie dans CMake comme dans l’exemple Android officiel.
+- Le CMake du moteur natif suit désormais plus fidèlement la configuration Android officielle de whisper.cpp et conserve la cible `arm64-v8a`.
 
 ## Nouveautés v3.1
 
@@ -63,12 +67,12 @@ git commit -m "Add Malagasy smart dictation Whisper v3.1"
 git push origin main
 ```
 
-Puis : **GitHub → carnet-audition → Actions → dernière exécution → Artifacts → Carnet-audition-v3.1-beta1-debug-apk**.
+Puis : **GitHub → carnet-audition → Actions → dernière exécution → Artifacts → Carnet-audition-v3.1-beta2-debug-apk**.
 
 ## Premier test recommandé
 
 1. Installer le nouvel APK et ouvrir l’application.
-2. Vérifier que le haut affiche **v3.1 beta.1**.
+2. Vérifier que le haut affiche **v3.1 beta.2**.
 3. Dans **Dictée intelligente Malagasy**, garder **Base Q5** puis toucher **Télécharger le modèle IA**. Attendre `Modèle IA local prêt ✓`.
 4. Choisir **Intelligent : direct + Whisper local** et `Malagasy (mg-MG)`.
 5. Appuyer sur **Question** et parler 5 à 10 secondes. Le texte direct doit apparaître progressivement si le moteur Android le prend en charge.
