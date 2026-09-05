@@ -1,12 +1,46 @@
 (() => {
-  const APP_VERSION = '3.0.0-beta.4';
+  const APP_VERSION = '3.0.0-beta.5';
   const STORAGE_KEY = 'assistant-pv-carnet-draft-v1';
   const DB_NAME = 'assistant-pv-carnet-audio';
   const DB_VERSION = 1;
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition || null;
   const CapacitorRuntime = window.Capacitor || null;
   const isNativeAndroid = CapacitorRuntime?.getPlatform?.() === 'android';
-  const NativeAudioRecorder = isNativeAndroid && CapacitorRuntime?.registerPlugin ? CapacitorRuntime.registerPlugin('NativeAudioRecorder') : null;
+
+  // Dans une application Capacitor sans bundler JS, le pont natif expose
+  // normalement les plugins sous window.Capacitor.Plugins. registerPlugin()
+  // peut ne pas être présent sur le global injecté par le WebView.
+  function resolveNativeAudioRecorder() {
+    if (!isNativeAndroid || !CapacitorRuntime) return null;
+
+    const injected = CapacitorRuntime.Plugins?.NativeAudioRecorder;
+    if (injected) return injected;
+
+    if (typeof CapacitorRuntime.registerPlugin === 'function') {
+      try {
+        return CapacitorRuntime.registerPlugin('NativeAudioRecorder');
+      } catch (error) {
+        console.warn('registerPlugin NativeAudioRecorder indisponible', error);
+      }
+    }
+
+    // Dernier secours pour le pont natif brut. Les méthodes Java sont toutes
+    // des promesses Capacitor, donc nativePromise suffit si le plugin a bien
+    // été enregistré dans MainActivity.
+    if (typeof CapacitorRuntime.nativePromise === 'function') {
+      const call = method => (options = {}) => CapacitorRuntime.nativePromise('NativeAudioRecorder', method, options);
+      return {
+        diagnostics: call('diagnostics'),
+        startRecording: call('startRecording'),
+        stopRecording: call('stopRecording'),
+        cancelRecording: call('cancelRecording'),
+      };
+    }
+
+    return null;
+  }
+
+  const NativeAudioRecorder = resolveNativeAudioRecorder();
   const state = { exchanges: [], activeRecording: null, stream: null, saveTimer: null };
   const $ = (s, root = document) => root.querySelector(s);
   const $$ = (s, root = document) => [...root.querySelectorAll(s)];
@@ -88,7 +122,7 @@
 
   async function startRecording(exchange, kind, card) {
     if (NativeAudioRecorder) return startNativeRecording(exchange, kind, card);
-    if (isNativeAndroid) throw new Error('Enregistreur Android natif absent de cet APK. Réinstallez la beta.4.');
+    if (isNativeAndroid) throw new Error('Pont audio natif indisponible. Installez la beta.5 puis relancez l’application.');
     return startWebRecording(exchange, kind, card);
   }
 
@@ -215,7 +249,7 @@
   async function runNativeDiagnostics() {
     const el = $('#exportStatus');
     if (!NativeAudioRecorder) {
-      el.textContent = 'ERREUR : module audio natif absent. Cette installation n’est pas la beta.4 complète.';
+      el.textContent = 'ERREUR : pont audio natif indisponible. Vérifiez que la beta.5 est bien installée.';
       return;
     }
     try {
