@@ -673,5 +673,5 @@ public class MainActivity extends BridgeActivity {
 `;
 fs.writeFileSync(mainActivity, activitySource);
 
-console.log('Enregistreur Android natif v3.2 beta.1 intégré :', pluginFile);
+console.log('Enregistreur Android natif v3.2.2 beta.1 intégré :', pluginFile);
 console.log('Audio WAV + dictée Android + flux PCM optionnel pour transcription en ligne sécurisée.');

@@ -1,8 +1,9 @@
 (() => {
-  const APP_VERSION = '3.2.0-beta.2';
+  const APP_VERSION = '3.2.2-beta.1';
   const STORAGE_KEY = 'assistant-pv-carnet-draft-v1';
   const PROFILE_KEY = 'assistant-pv-carnet-investigator-profile-v1';
   const AI_SETTINGS_KEY = 'assistant-pv-carnet-ai-settings-v1';
+  const LEARNED_CORRECTIONS_KEY = 'assistant-pv-carnet-learned-corrections-v1';
   const DEFAULT_DICTIONARY = `gendarmerie
 brigade
 OPJ
@@ -75,7 +76,7 @@ Madagasikara`;
 
   const NativeAudioRecorder = resolveNativeAudioRecorder();
   const NativeWhisper = resolveNativeWhisper();
-  const state = { exchanges: [], activeRecording: null, stream: null, saveTimer: null, profile: null, whisperPoll: null, lastCloudCheck: null };
+  const state = { exchanges: [], activeRecording: null, stream: null, saveTimer: null, profile: null, whisperPoll: null, lastCloudCheck: null, learnedCorrections: loadLearnedCorrections(), reviewJobs: new Map() };
   const $ = (s, root = document) => root.querySelector(s);
   const $$ = (s, root = document) => [...root.querySelectorAll(s)];
   const uid = () => globalThis.crypto?.randomUUID?.() || `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -95,6 +96,7 @@ Madagasikara`;
     document.addEventListener('change', scheduleSave);
     updateSpeechSupportMessage();
     refreshWhisperStatus().catch(() => {});
+    updateLearnedCorrectionsCount();
   }
 
   function bindGeneral() {
@@ -113,6 +115,7 @@ Madagasikara`;
     });
     $('#downloadWhisperBtn')?.addEventListener('click', downloadWhisperModel);
     $('#deleteWhisperBtn')?.addEventListener('click', deleteWhisperModel);
+    $('#clearLearnedCorrectionsBtn')?.addEventListener('click', clearLearnedCorrections);
     $('#whisperModel')?.addEventListener('change', () => refreshWhisperStatus().catch(() => {}));
     $('#testCloudBtn')?.addEventListener('click', testCloudConnection);
     $$('input[name="speechModeChoice"]').forEach(input => input.addEventListener('change', () => {
@@ -123,11 +126,11 @@ Madagasikara`;
   }
 
   function getSpeechMode() {
-    return $('input[name="speechModeChoice"]:checked')?.value || 'cloud';
+    return $('input[name="speechModeChoice"]:checked')?.value || 'android';
   }
 
   function setSpeechMode(mode) {
-    const safe = ['cloud','android','private'].includes(mode) ? mode : 'cloud';
+    const safe = ['android','private'].includes(mode) ? mode : 'android';
     const input = $(`input[name="speechModeChoice"][value="${safe}"]`);
     if (input) input.checked = true;
     syncSpeechModeUi();
@@ -136,46 +139,40 @@ Madagasikara`;
   function syncSpeechModeUi() {
     const mode = getSpeechMode();
     const cloudSetup = $('#cloudSetup');
-    if (cloudSetup) cloudSetup.hidden = mode !== 'cloud';
-    if (mode === 'cloud') {
+    if (cloudSetup) cloudSetup.hidden = true;
+    if (mode === 'android') {
       $('#speechEngine').value = 'smart';
       $('#autoTranscription').checked = true;
       $('#localSpeechOnly').checked = false;
-      $('#aiReviewAfterStop').checked = false;
-      updateCloudStatus(cloudConfigured() ? 'Prêt à tester' : 'À configurer', cloudConfigured() ? 'is-neutral' : 'is-neutral');
-    } else if (mode === 'android') {
-      $('#speechEngine').value = 'live';
-      $('#autoTranscription').checked = true;
-      $('#localSpeechOnly').checked = false;
-      $('#aiReviewAfterStop').checked = false;
-      updateCloudStatus('Mode Android', 'is-neutral');
+      updateCloudStatus('Gratuit', 'is-online');
     } else {
       $('#speechEngine').value = 'offline';
       $('#autoTranscription').checked = false;
       $('#localSpeechOnly').checked = true;
       $('#aiReviewAfterStop').checked = true;
-      updateCloudStatus('Mode local', 'is-neutral');
+      updateCloudStatus('Local', 'is-neutral');
     }
   }
 
   function initAiSettings() {
     let cfg = null;
     try { cfg = JSON.parse(localStorage.getItem(AI_SETTINGS_KEY) || 'null'); } catch (_) { cfg = null; }
-    const migrated = Number(cfg?.settingsVersion || 0) < 4;
+    const migrated = Number(cfg?.settingsVersion || 0) < 6;
     if (!$('#speechDictionary').value.trim()) $('#speechDictionary').value = cfg?.dictionary || DEFAULT_DICTIONARY;
     if (cfg?.model && $('#whisperModel')) $('#whisperModel').value = cfg.model;
-    $('#aiReviewAfterStop').checked = migrated ? false : Boolean(cfg?.aiReviewAfterStop);
+    $('#aiReviewAfterStop').checked = migrated ? true : cfg?.aiReviewAfterStop !== false;
     if (cfg?.keepLiveAlternative !== undefined) $('#keepLiveAlternative').checked = Boolean(cfg.keepLiveAlternative);
     if (cfg?.learnFromCorrections !== undefined) $('#learnFromCorrections').checked = Boolean(cfg.learnFromCorrections);
     if ($('#onlineRelayUrl')) $('#onlineRelayUrl').value = cfg?.relayUrl || '';
     if ($('#onlineRelayToken')) $('#onlineRelayToken').value = cfg?.relayToken || '';
     if ($('#microProfile')) $('#microProfile').value = cfg?.microProfile || 'near_field';
     const oldEngine = cfg?.engine || $('#speechEngine')?.value || 'smart';
-    const preferredMode = cfg?.speechMode || (oldEngine === 'offline' ? 'private' : oldEngine === 'live' ? 'android' : 'cloud');
-    setSpeechMode(migrated ? 'cloud' : preferredMode);
+    let preferredMode = cfg?.speechMode || (oldEngine === 'offline' ? 'private' : 'android');
+    if (preferredMode === 'cloud') preferredMode = 'android';
+    setSpeechMode(migrated ? 'android' : preferredMode);
     if (migrated) persistAiSettings();
     ['whisperModel','speechDictionary','aiReviewAfterStop','keepLiveAlternative','learnFromCorrections','onlineRelayUrl','onlineRelayToken','microProfile','autoTranscription','localSpeechOnly'].forEach(id => {
-      $(`#${id}`)?.addEventListener('change', () => { persistAiSettings(); syncSpeechModeUi(); });
+      $(`#${id}`)?.addEventListener('change', () => { persistAiSettings(); });
     });
     $('#speechDictionary')?.addEventListener('input', persistAiSettings);
     $('#onlineRelayUrl')?.addEventListener('input', () => { persistAiSettings(); updateCloudStatus(cloudConfigured() ? 'Prêt à tester' : 'À configurer', 'is-neutral'); });
@@ -184,7 +181,7 @@ Madagasikara`;
 
   function persistAiSettings() {
     const next = {
-      settingsVersion: 4,
+      settingsVersion: 6,
       speechMode: getSpeechMode(),
       engine: $('#speechEngine')?.value || 'smart',
       model: $('#whisperModel')?.value || 'base-q5_1',
@@ -208,7 +205,7 @@ Madagasikara`;
   }
 
   function cloudConfigured() {
-    return Boolean(normalizeRelayUrl($('#onlineRelayUrl')?.value));
+    return false;
   }
 
   function updateCloudStatus(text, className = 'is-neutral') {
@@ -276,6 +273,7 @@ Madagasikara`;
   function buildBiasingText() {
     const lines = [$('#speechDictionary')?.value || ''];
     if (state.profile) lines.push(state.profile.grade || '', state.profile.name || '', state.profile.unit || '');
+    lines.push(...Object.values(state.learnedCorrections || {}).map(rule => rule?.replacement || '').filter(Boolean));
     lines.push($('#place')?.value || '');
     const identityFirstLine = ($('#personIdentity')?.value || '').split(/\n/)[0];
     if (identityFirstLine) lines.push(identityFirstLine);
@@ -307,7 +305,7 @@ Madagasikara`;
         bar.style.width = `${Math.max(2, Number(st.progress || 0))}%`;
       } else if (st.installed) {
         label.textContent = 'Modèle local prêt';
-        details.textContent = `${modelId} • ${(Number(st.sizeBytes || 0)/1024/1024).toFixed(1)} Mo • transcription hors ligne`;
+        details.textContent = `${modelId} • ${(Number(st.sizeBytes || 0)/1024/1024).toFixed(1)} Mo • contrôle local prêt après chaque arrêt`;
         bar.style.width = '100%';
       } else {
         label.textContent = 'Modèle local non installé';
@@ -332,7 +330,9 @@ Madagasikara`;
     try {
       toast('Téléchargement du modèle local démarré. Gardez l’application ouverte.');
       await NativeWhisper.downloadModel({ modelId });
-      toast('Modèle local installé.');
+      if ($('#aiReviewAfterStop')) $('#aiReviewAfterStop').checked = true;
+      persistAiSettings();
+      toast('Modèle local installé. Le contrôle automatique est activé.');
     } catch (error) {
       toast(error?.message || 'Téléchargement du modèle impossible.');
     } finally {
@@ -352,6 +352,149 @@ Madagasikara`;
       toast('Modèle local supprimé.');
       await refreshWhisperStatus();
     } catch (error) { toast(error?.message || 'Suppression impossible.'); }
+  }
+
+  function loadLearnedCorrections() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(LEARNED_CORRECTIONS_KEY) || '{}');
+      return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+    } catch (_) { return {}; }
+  }
+
+  function saveLearnedCorrections() {
+    const entries = Object.entries(state.learnedCorrections || {})
+      .sort((a, b) => Number(b[1]?.updatedAt || 0) - Number(a[1]?.updatedAt || 0))
+      .slice(0, 240);
+    state.learnedCorrections = Object.fromEntries(entries);
+    localStorage.setItem(LEARNED_CORRECTIONS_KEY, JSON.stringify(state.learnedCorrections));
+    updateLearnedCorrectionsCount();
+  }
+
+  function updateLearnedCorrectionsCount() {
+    const el = $('#learnedCorrectionsCount');
+    if (!el) return;
+    const count = Object.keys(state.learnedCorrections || {}).length;
+    el.textContent = `${count} ${count > 1 ? 'règles apprises' : 'règle apprise'}`;
+  }
+
+  function clearLearnedCorrections() {
+    const count = Object.keys(state.learnedCorrections || {}).length;
+    if (!count) return toast('Aucune correction apprise pour le moment.');
+    if (!confirm(`Réinitialiser les ${count} correction(s) apprises localement ?`)) return;
+    state.learnedCorrections = {};
+    localStorage.removeItem(LEARNED_CORRECTIONS_KEY);
+    updateLearnedCorrectionsCount();
+    toast('Mémoire de corrections réinitialisée.');
+  }
+
+  function normalizeToken(value) {
+    return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('fr').replace(/[’]/g, "'").replace(/[^a-z0-9'\-]/g, '');
+  }
+
+  function levenshteinDistance(a, b) {
+    a = normalizeToken(a); b = normalizeToken(b);
+    if (!a) return b.length; if (!b) return a.length;
+    const prev = Array.from({length: b.length + 1}, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+      let left = i;
+      let diag = i - 1;
+      for (let j = 1; j <= b.length; j++) {
+        const up = prev[j];
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        const cur = Math.min(up + 1, left + 1, diag + cost);
+        diag = up; prev[j] = cur; left = cur;
+      }
+      prev[0] = i;
+    }
+    return prev[b.length];
+  }
+
+  function tokenSimilarity(a, b) {
+    const aa = normalizeToken(a), bb = normalizeToken(b);
+    const max = Math.max(aa.length, bb.length);
+    return max ? 1 - (levenshteinDistance(aa, bb) / max) : 1;
+  }
+
+  function learnCorrectionPairs(correctedText, systemText) {
+    if (!$('#learnFromCorrections')?.checked) return 0;
+    const corrected = String(correctedText || '').match(/[A-Za-zÀ-ÖØ-öø-ÿ'’\-]+/g) || [];
+    const system = String(systemText || '').match(/[A-Za-zÀ-ÖØ-öø-ÿ'’\-]+/g) || [];
+    if (!corrected.length || corrected.length !== system.length || corrected.length > 80) return 0;
+    const dictionary = new Set((($('#speechDictionary')?.value || '').match(/[A-Za-zÀ-ÖØ-öø-ÿ'’\-]+/g) || []).map(normalizeToken));
+    let added = 0;
+    for (let i = 0; i < corrected.length; i++) {
+      const wrong = system[i], right = corrected[i];
+      const wn = normalizeToken(wrong), rn = normalizeToken(right);
+      if (!wn || !rn || wn === rn || wn.length < 4 || rn.length < 4) continue;
+      const sim = tokenSimilarity(wn, rn);
+      const looksImportant = dictionary.has(rn) || /^[A-ZÀ-ÖØ-Ý]/.test(right) || rn.length >= 8;
+      if (sim < 0.42 || (!looksImportant && sim < 0.68)) continue;
+      const current = state.learnedCorrections[wn];
+      state.learnedCorrections[wn] = {
+        replacement: right.replace(/’/g, "'"),
+        hits: Number(current?.hits || 0) + 1,
+        updatedAt: Date.now(),
+      };
+      added++;
+      if (added >= 8) break;
+    }
+    if (added) saveLearnedCorrections();
+    return added;
+  }
+
+  function applyLearnedCorrections(text) {
+    const value = String(text || '');
+    if (!value || !state.learnedCorrections || !Object.keys(state.learnedCorrections).length) return value;
+    return value.replace(/[A-Za-zÀ-ÖØ-öø-ÿ'’\-]+/g, word => {
+      const rule = state.learnedCorrections[normalizeToken(word)];
+      if (!rule?.replacement) return word;
+      let replacement = String(rule.replacement);
+      if (word === word.toUpperCase()) replacement = replacement.toUpperCase();
+      else if (/^[A-ZÀ-ÖØ-Ý]/.test(word)) replacement = replacement.charAt(0).toUpperCase() + replacement.slice(1);
+      return replacement;
+    });
+  }
+
+  function transcriptionQuality(text) {
+    const value = String(text || '').trim();
+    if (!value) return -10;
+    const tokens = value.match(/[A-Za-zÀ-ÖØ-öø-ÿ'’\-]{2,}/g) || [];
+    if (!tokens.length) return -5;
+    const normalized = tokens.map(normalizeToken).filter(Boolean);
+    const unique = new Set(normalized);
+    const dictionary = new Set((($('#speechDictionary')?.value || '').match(/[A-Za-zÀ-ÖØ-öø-ÿ'’\-]+/g) || []).map(normalizeToken));
+    const dictHits = normalized.filter(t => dictionary.has(t)).length;
+    const repetition = normalized.length ? 1 - unique.size / normalized.length : 0;
+    const alphaChars = (value.match(/[A-Za-zÀ-ÖØ-öø-ÿ]/g) || []).length;
+    const alphaRatio = alphaChars / Math.max(1, value.length);
+    const suspicious = /(thank you|thanks for watching|subscribe|amara\.org|sous[- ]titres|subtitle|musique|\[music\])/i.test(value) ? 1 : 0;
+    const mgCommon = new Set(['ny','sy','dia','fa','aho','izy','izany','amin','tamin','ao','eto','tsy','no','ka','ary','raha','izay','misy','rehefa','satria','tena','mba','ianao']);
+    const frCommon = new Set(['le','la','les','de','des','du','et','est','je','vous','nous','dans','pour','que','qui','pas','sur','avec','au','une','un']);
+    const lang = ($('#speechLanguage')?.value || 'mg-MG').startsWith('fr') ? frCommon : mgCommon;
+    const languageHits = normalized.filter(t => lang.has(t)).length;
+    return Math.min(2.5,
+      Math.log10(1 + normalized.length) * 0.55 +
+      Math.min(0.7, dictHits * 0.08) +
+      Math.min(0.55, languageHits * 0.045) +
+      alphaRatio * 0.35 -
+      repetition * 1.1 -
+      suspicious * 1.4
+    );
+  }
+
+  function chooseSmartTranscript(directText, aiText, directConfidence = -1) {
+    const direct = String(directText || '').trim();
+    const ai = applyLearnedCorrections(String(aiText || '').trim());
+    if (!ai) return { choice: 'direct', text: direct, directScore: transcriptionQuality(direct), aiScore: -10, reason: 'empty-ai' };
+    if (!direct) return { choice: 'ai', text: ai, directScore: -10, aiScore: transcriptionQuality(ai), reason: 'empty-direct' };
+    const ds = transcriptionQuality(direct), as = transcriptionQuality(ai);
+    const dw = (direct.match(/\S+/g) || []).length, aw = (ai.match(/\S+/g) || []).length;
+    const ratio = aw / Math.max(1, dw);
+    const plausibleLength = ratio >= 0.45 && ratio <= 2.4;
+    const confidence = Number(directConfidence ?? -1);
+    const threshold = confidence >= 0.78 ? 0.34 : confidence >= 0.55 ? 0.22 : confidence >= 0 ? 0.10 : 0.18;
+    const aiClearlyBetter = plausibleLength && as >= ds + threshold;
+    return { choice: aiClearlyBetter ? 'ai' : 'direct', text: aiClearlyBetter ? ai : direct, directScore: ds, aiScore: as, reason: aiClearlyBetter ? 'quality' : 'keep-direct' };
   }
 
   function learnCorrectionWords(correctedText, systemText) {
@@ -469,6 +612,8 @@ Madagasikara`;
       questionMimeType: overrides.questionMimeType || '', answerMimeType: overrides.answerMimeType || '',
       questionAudioPath: overrides.questionAudioPath || '', answerAudioPath: overrides.answerAudioPath || '',
       questionLiveTranscript: overrides.questionLiveTranscript || '', answerLiveTranscript: overrides.answerLiveTranscript || '',
+      questionLiveRawTranscript: overrides.questionLiveRawTranscript || '', answerLiveRawTranscript: overrides.answerLiveRawTranscript || '',
+      questionAiCandidate: overrides.questionAiCandidate || '', answerAiCandidate: overrides.answerAiCandidate || '',
       questionAiTranscript: overrides.questionAiTranscript || '', answerAiTranscript: overrides.answerAiTranscript || '',
       questionAiModel: overrides.questionAiModel || '', answerAiModel: overrides.answerAiModel || '',
       questionAiElapsedMs: Number(overrides.questionAiElapsedMs || 0), answerAiElapsedMs: Number(overrides.answerAiElapsedMs || 0),
@@ -509,16 +654,24 @@ Madagasikara`;
     qText.addEventListener('input', e => { exchange.question = e.target.value; scheduleSave(); });
     aText.addEventListener('input', e => { exchange.answer = e.target.value; scheduleSave(); });
     qText.addEventListener('blur', () => {
-      const learned = learnCorrectionWords(qText.value, exchange.questionAiTranscript || exchange.questionLiveTranscript || '');
-      if (learned) toast(`${learned} mot(s) corrigé(s) ajouté(s) au dictionnaire local.`);
+      const source = String(exchange.questionAiDecision || '').includes('ai') ? (exchange.questionAiTranscript || '') : (exchange.questionLiveTranscript || exchange.questionLiveRawTranscript || exchange.questionAiTranscript || '');
+      const learned = learnCorrectionWords(qText.value, source);
+      const pairs = learnCorrectionPairs(qText.value, source);
+      if (learned || pairs) toast(`${learned + pairs} amélioration(s) mémorisée(s) localement.`);
     });
     aText.addEventListener('blur', () => {
-      const learned = learnCorrectionWords(aText.value, exchange.answerAiTranscript || exchange.answerLiveTranscript || '');
-      if (learned) toast(`${learned} mot(s) corrigé(s) ajouté(s) au dictionnaire local.`);
+      const source = String(exchange.answerAiDecision || '').includes('ai') ? (exchange.answerAiTranscript || '') : (exchange.answerLiveTranscript || exchange.answerLiveRawTranscript || exchange.answerAiTranscript || '');
+      const learned = learnCorrectionWords(aText.value, source);
+      const pairs = learnCorrectionPairs(aText.value, source);
+      if (learned || pairs) toast(`${learned + pairs} amélioration(s) mémorisée(s) localement.`);
     });
     $('.signature-after', card).addEventListener('change', e => { exchange.signatureAfter = e.target.checked; scheduleSave(); });
     $('.question-record', card).addEventListener('click', () => toggleRecording(exchange, 'question', card));
     $('.answer-record', card).addEventListener('click', () => toggleRecording(exchange, 'answer', card));
+    $('.question-review', card)?.addEventListener('click', () => runManualLocalReview(exchange, 'question', card));
+    $('.answer-review', card)?.addEventListener('click', () => runManualLocalReview(exchange, 'answer', card));
+    $$('.use-review', card).forEach(btn => btn.addEventListener('click', () => useReviewSuggestion(exchange, btn.dataset.kind, card)));
+    $$('.dismiss-review', card).forEach(btn => btn.addEventListener('click', () => dismissReviewSuggestion(exchange, btn.dataset.kind, card)));
     $('.remove-exchange', card).addEventListener('click', async () => {
       if (state.activeRecording) return toast('Arrêtez d’abord l’enregistrement en cours.');
       if (exchange.questionClipId) await deleteClip(exchange.questionClipId);
@@ -549,7 +702,7 @@ Madagasikara`;
 
   async function startRecording(exchange, kind, card) {
     if (NativeAudioRecorder) return startNativeRecording(exchange, kind, card);
-    if (isNativeAndroid) throw new Error('Pont audio natif indisponible. Réinstallez la v3.2 beta.2 puis relancez l’application.');
+    if (isNativeAndroid) throw new Error('Pont audio natif indisponible. Réinstallez la v3.2.2 gratuite intelligente puis relancez l’application.');
     return startWebRecording(exchange, kind, card);
   }
 
@@ -746,8 +899,12 @@ Madagasikara`;
     const exchange = state.exchanges.find(x => x.id === active.exchangeId);
     const card = active.card;
     if (!exchange || !card) return;
-    const text = String(data.text || '').trim();
+    const rawText = String(data.text || '').trim();
+    const text = applyLearnedCorrections(rawText);
+    active.androidRawText = rawText || active.androidRawText || '';
     active.androidText = text || active.androidText;
+    const reportedConfidence = Number(data.confidence ?? -1);
+    if (reportedConfidence >= 0) active.androidConfidence = reportedConfidence;
     if (text && !active.cloudHasText) {
       const value = [active.baseText, text].filter(Boolean).join(active.baseText ? ' ' : '').trim();
       const textarea = $(`.${active.kind}-text`, card);
@@ -797,6 +954,7 @@ Madagasikara`;
       player.src = CapacitorRuntime?.convertFileSrc ? CapacitorRuntime.convertFileSrc(audioPath) : audioPath;
       player.hidden = false;
       try { await pollNativeTranscript(active, true); } catch (_) {}
+      exchange[`${kind}LiveRawTranscript`] = active.androidRawText || active.androidText || '';
       exchange[`${kind}LiveTranscript`] = active.androidText || '';
       const cloudFinal = await stopCloudTranscription(active);
       const textarea = $(`.${kind}-text`, card);
@@ -809,8 +967,12 @@ Madagasikara`;
       } else {
         status.textContent = liveText ? `Audio + texte conservés • ${formatDuration(durationMs)}` : `Audio conservé • ${formatDuration(durationMs)} • texte indisponible`;
       }
+      const reviewBtn = $(`.${kind}-review`, card);
+      if (reviewBtn) reviewBtn.hidden = false;
       saveDraft();
-      await maybeReviewWithWhisper({ active, exchange, kind, card, status, audioPath, durationMs, liveText });
+      if ($('#aiReviewAfterStop')?.checked) {
+        setTimeout(() => maybeReviewWithWhisper({ active, exchange, kind, card, status, audioPath, durationMs, liveText, automatic: true }).catch(() => {}), 30);
+      }
     } catch (error) {
       console.error(error);
       status.textContent = 'Échec de l’enregistrement.';
@@ -823,39 +985,127 @@ Madagasikara`;
     }
   }
 
-  async function maybeReviewWithWhisper({ active, exchange, kind, card, status, audioPath, durationMs, liveText }) {
-    const mode = $('#speechEngine')?.value || 'smart';
-    if (!$('#aiReviewAfterStop')?.checked || mode === 'live' || !isNativeAndroid || !NativeWhisper || !audioPath) return;
+  async function maybeReviewWithWhisper({ active, exchange, kind, card, status, audioPath, durationMs, liveText, automatic = false }) {
+    if (!isNativeAndroid || !NativeWhisper || !audioPath) return false;
     const modelId = $('#whisperModel')?.value || 'base-q5_1';
     let modelState = null;
     try { modelState = await NativeWhisper.modelStatus({ modelId }); } catch (_) {}
+    const reviewBtn = $(`.${kind}-review`, card);
+    const note = $(`.${kind}-review-note`, card);
     if (!modelState?.installed) {
-      status.textContent = `Audio + texte conservés • ${formatDuration(durationMs)} • modèle local non installé`;
-      return;
+      if (automatic) {
+        if (note) note.textContent = 'Installez le modèle local pour activer le contrôle automatique.';
+      } else toast('Installez d’abord le modèle local dans les paramètres avancés.');
+      return false;
     }
+
+    const jobKey = `${exchange.id}:${kind}`;
+    if (state.reviewJobs.has(jobKey)) return false;
+    const reviewToken = uid();
+    state.reviewJobs.set(jobKey, reviewToken);
+    exchange[`${kind}ReviewToken`] = reviewToken;
+    const textarea = $(`.${kind}-text`, card);
+    const directTextAtStart = textarea.value.trim();
+    const expectedAudioPath = audioPath;
     status.classList.add('ai-processing');
-    status.textContent = `Audio conservé • révision locale en cours…`;
+    if (reviewBtn) reviewBtn.disabled = true;
+    if (note) note.textContent = 'Vérification locale en arrière-plan…';
+    if (!state.activeRecording || state.activeRecording.exchangeId !== exchange.id || state.activeRecording.kind !== kind) {
+      status.textContent = `Audio + texte direct conservés • ${formatDuration(durationMs)} • contrôle local en cours`;
+    }
+
     try {
       const language = ($('#speechLanguage').value || 'mg-MG').toLowerCase().startsWith('fr') ? 'fr' : 'mg';
       const ai = await NativeWhisper.transcribe({ audioPath, modelId, language, prompt: buildWhisperPrompt() });
-      const aiText = String(ai?.text || '').trim();
+      if (state.reviewJobs.get(jobKey) !== reviewToken || exchange[`${kind}AudioPath`] !== expectedAudioPath || !state.exchanges.includes(exchange) || !card.isConnected) return false;
+      const aiTextRaw = String(ai?.text || '').trim();
+      const aiText = applyLearnedCorrections(aiTextRaw);
       if (!aiText) throw new Error('Le modèle local n’a produit aucun texte.');
       exchange[`${kind}AiTranscript`] = aiText;
       exchange[`${kind}AiModel`] = modelId;
       exchange[`${kind}AiElapsedMs`] = Number(ai?.elapsedMs || 0);
-      const finalText = [active.baseText, aiText].filter(Boolean).join(active.baseText ? ' ' : '').trim();
-      const textarea = $(`.${kind}-text`, card);
-      textarea.value = finalText;
-      if (kind === 'question') exchange.question = finalText; else exchange.answer = finalText;
-      status.textContent = `Audio + texte local conservés • ${formatDuration(durationMs)} • ${(Number(ai?.elapsedMs || 0)/1000).toFixed(1)} s`;
+      const currentText = textarea.value.trim();
+      const userEditedSinceStart = currentText !== directTextAtStart;
+      const directForComparison = String(active?.androidText || directTextAtStart || '').trim();
+      const decision = chooseSmartTranscript(directForComparison, aiText, active?.androidConfidence ?? -1);
+      const candidateText = [active?.baseText || '', aiText].filter(Boolean).join(active?.baseText ? ' ' : '').trim();
+      exchange[`${kind}AiCandidate`] = candidateText;
+      exchange[`${kind}AiDecision`] = decision.choice;
+      exchange[`${kind}AiDirectScore`] = decision.directScore;
+      exchange[`${kind}AiScore`] = decision.aiScore;
+
+      if (!userEditedSinceStart && decision.choice === 'ai') {
+        const finalText = candidateText;
+        textarea.value = finalText;
+        if (kind === 'question') exchange.question = finalText; else exchange.answer = finalText;
+        exchange[`${kind}AiCandidate`] = '';
+        hideReviewSuggestion(card, kind);
+        status.textContent = `Audio + texte vérifiés localement • ${formatDuration(durationMs)} • ${(Number(ai?.elapsedMs || 0)/1000).toFixed(1)} s`;
+        if (note) note.textContent = 'La proposition locale a été retenue automatiquement.';
+      } else {
+        showReviewSuggestion(card, kind, candidateText);
+        status.textContent = `Audio + texte direct conservés • ${formatDuration(durationMs)} • proposition locale disponible`;
+        if (note) note.textContent = userEditedSinceStart ? 'Votre correction manuelle a été conservée.' : 'Le texte direct reste prioritaire ; comparez si nécessaire.';
+      }
       saveDraft();
+      return true;
     } catch (error) {
       console.warn('Whisper review failed', error);
-      status.textContent = `Audio + texte direct conservés • ${formatDuration(durationMs)} • révision locale indisponible`;
-      if (!liveText) toast(error?.message || 'Révision locale indisponible.');
+      if (note) note.textContent = 'Contrôle local indisponible pour cet enregistrement.';
+      if (!automatic) toast(error?.message || 'Révision locale indisponible.');
+      return false;
     } finally {
+      if (state.reviewJobs.get(jobKey) === reviewToken) state.reviewJobs.delete(jobKey);
       status.classList.remove('ai-processing');
+      if (reviewBtn) reviewBtn.disabled = false;
     }
+  }
+
+  async function runManualLocalReview(exchange, kind, card) {
+    if (state.activeRecording) return toast('Arrêtez d’abord l’enregistrement en cours.');
+    const audioPath = exchange[`${kind}AudioPath`];
+    if (!audioPath) return toast('Aucun audio à vérifier pour ce bloc.');
+    const status = $(`.${kind}-status`, card);
+    const liveText = $(`.${kind}-text`, card).value.trim();
+    await maybeReviewWithWhisper({ active: { baseText: '' }, exchange, kind, card, status, audioPath, durationMs: exchange[`${kind}DurationMs`] || 0, liveText, automatic: false });
+  }
+
+  function showReviewSuggestion(card, kind, text) {
+    const panel = $(`.${kind}-review-suggestion`, card);
+    if (!panel) return;
+    $('.review-suggestion-text', panel).textContent = text;
+    panel.hidden = false;
+  }
+
+  function hideReviewSuggestion(card, kind) {
+    const panel = $(`.${kind}-review-suggestion`, card);
+    if (panel) panel.hidden = true;
+  }
+
+  function useReviewSuggestion(exchange, kind, card) {
+    const suggestion = String(exchange[`${kind}AiCandidate`] || exchange[`${kind}AiTranscript`] || '').trim();
+    if (!suggestion) return toast('Aucune proposition locale disponible.');
+    const textarea = $(`.${kind}-text`, card);
+    const before = textarea.value.trim();
+    textarea.value = suggestion;
+    if (kind === 'question') exchange.question = suggestion; else exchange.answer = suggestion;
+    learnCorrectionWords(suggestion, before);
+    learnCorrectionPairs(suggestion, before);
+    exchange[`${kind}AiCandidate`] = '';
+    exchange[`${kind}AiDecision`] = 'manual-ai';
+    hideReviewSuggestion(card, kind);
+    const note = $(`.${kind}-review-note`, card);
+    if (note) note.textContent = 'Proposition locale utilisée.';
+    saveDraft();
+    toast('Correction locale appliquée.');
+  }
+
+  function dismissReviewSuggestion(exchange, kind, card) {
+    exchange[`${kind}AiCandidate`] = '';
+    hideReviewSuggestion(card, kind);
+    const note = $(`.${kind}-review-note`, card);
+    if (note) note.textContent = 'Texte direct conservé.';
+    saveDraft();
   }
 
   async function startWebRecording(exchange, kind, card) {
@@ -953,7 +1203,7 @@ Madagasikara`;
   async function runNativeDiagnostics() {
     const el = $('#exportStatus');
     if (!NativeAudioRecorder) {
-      el.textContent = 'ERREUR : pont audio natif indisponible. Vérifiez que la v3.2 beta.2 est bien installée.';
+      el.textContent = 'ERREUR : pont audio natif indisponible. Vérifiez que la v3.2.2 est bien installée.';
       return;
     }
     try {
@@ -990,6 +1240,8 @@ Madagasikara`;
       player.src = CapacitorRuntime?.convertFileSrc ? CapacitorRuntime.convertFileSrc(audioPath) : audioPath;
       player.hidden = false;
       $(`.${kind}-status`, card).textContent = `Audio conservé • ${formatDuration(exchange[`${kind}DurationMs`])}`;
+      const reviewBtn = $(`.${kind}-review`, card); if (reviewBtn) reviewBtn.hidden = false;
+      if (exchange[`${kind}AiCandidate`]) showReviewSuggestion(card, kind, exchange[`${kind}AiCandidate`]);
       return;
     }
     const clipId = exchange[`${kind}ClipId`];
@@ -999,6 +1251,8 @@ Madagasikara`;
     player.src = URL.createObjectURL(blob);
     player.hidden = false;
     $(`.${kind}-status`, card).textContent = `Audio conservé • ${formatDuration(exchange[`${kind}DurationMs`])}`;
+    const reviewBtn = $(`.${kind}-review`, card); if (reviewBtn) reviewBtn.hidden = false;
+    if (exchange[`${kind}AiCandidate`]) showReviewSuggestion(card, kind, exchange[`${kind}AiCandidate`]);
   }
 
   function formatDuration(ms) {
@@ -1008,7 +1262,7 @@ Madagasikara`;
 
   function collectDraft() {
     return {
-      version: 4,
+      version: 5,
       updatedAt: new Date().toISOString(),
       investigatorGrade: $('#investigatorGrade').value,
       investigatorName: $('#investigatorName').value,
@@ -1056,6 +1310,7 @@ Madagasikara`;
     const ids = ['investigatorGrade','investigatorName','investigatorQuality','investigatorFunction','investigatorUnit','personRole','speechLanguage','personIdentity','identityVerification','place','startDateTime','endDateTime','closingFormula','personSignatureLabel'];
     ids.forEach(id => { if (d[id] !== undefined && $(`#${id}`)) $(`#${id}`).value = d[id]; });
     const legacyDraft = Number(d.version || 0) < 3;
+    const preSmartDraft = Number(d.version || 0) < 5;
     if (d.microProfile !== undefined && $('#microProfile')) $('#microProfile').value = d.microProfile;
     if (d.speechMode && Number(d.version || 0) >= 4) setSpeechMode(d.speechMode);
     if (d.autoTranscription !== undefined) $('#autoTranscription').checked = Boolean(d.autoTranscription);
@@ -1064,7 +1319,7 @@ Madagasikara`;
     if (d.speechEngine && $('#speechEngine')) $('#speechEngine').value = d.speechEngine;
     if (d.whisperModel && $('#whisperModel')) $('#whisperModel').value = d.whisperModel;
     if (d.speechDictionary !== undefined && $('#speechDictionary')) $('#speechDictionary').value = d.speechDictionary;
-    if (legacyDraft) $('#aiReviewAfterStop').checked = false;
+    if (preSmartDraft) $('#aiReviewAfterStop').checked = true;
     else if (d.aiReviewAfterStop !== undefined && $('#aiReviewAfterStop')) $('#aiReviewAfterStop').checked = Boolean(d.aiReviewAfterStop);
     if (d.keepLiveAlternative !== undefined && $('#keepLiveAlternative')) $('#keepLiveAlternative').checked = Boolean(d.keepLiveAlternative);
     if (d.learnFromCorrections !== undefined && $('#learnFromCorrections')) $('#learnFromCorrections').checked = Boolean(d.learnFromCorrections);
@@ -1115,7 +1370,7 @@ Madagasikara`;
         appVersion: APP_VERSION,
         exportedAt: new Date().toISOString(),
         speechLanguage: $('#speechLanguage').value,
-        speechMode: { mode: getSpeechMode(), automatic: $('#autoTranscription').checked, preferOffline: $('#localSpeechOnly').checked, localOnly: getSpeechMode() === 'private', engine: $('#speechEngine')?.value || 'smart', onlineConfigured: cloudConfigured(), onlineProvider: getSpeechMode() === 'cloud' ? 'secure-relay' : '', microProfile: $('#microProfile')?.value || 'near_field', whisperModel: $('#whisperModel')?.value || '', whisperReview: $('#aiReviewAfterStop')?.checked === true, learnedCorrections: $('#learnFromCorrections')?.checked !== false, vocabulary: buildBiasingText().split(/\n+/).filter(Boolean) },
+        speechMode: { mode: getSpeechMode(), automatic: $('#autoTranscription').checked, preferOffline: $('#localSpeechOnly').checked, localOnly: getSpeechMode() === 'private', engine: $('#speechEngine')?.value || 'smart', onlineConfigured: cloudConfigured(), onlineProvider: '', microProfile: $('#microProfile')?.value || 'near_field', whisperModel: $('#whisperModel')?.value || '', whisperReview: $('#aiReviewAfterStop')?.checked === true, learnedCorrections: $('#learnFromCorrections')?.checked !== false, vocabulary: buildBiasingText().split(/\n+/).filter(Boolean) },
         investigator: {
           grade: state.profile.grade,
           name: state.profile.name,

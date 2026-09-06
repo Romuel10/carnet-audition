@@ -17,7 +17,7 @@
       <img src="icon.png" alt="" class="app-icon" />
       <div class="brand-copy">
         <span class="kicker">ASSISTANT PV GENDARMERIE</span>
-        <div class="title-line"><h1>Carnet d’audition</h1><span class="version-badge">v3.2 beta.2</span></div>
+        <div class="title-line"><h1>Carnet d’audition</h1><span class="version-badge">v3.2.2 gratuite intelligente</span></div>
       </div>
     </div>
     <div class="header-state">
@@ -32,10 +32,10 @@
         <svg viewBox="0 0 24 24"><path d="M12 3v10m-4-4v4a4 4 0 0 0 8 0V9M6 13a6 6 0 0 0 12 0M12 19v3m-4 0h8"/></svg>
       </div>
       <div class="status-copy">
-        <strong>Audio original et transcription synchronisés</strong>
-        <p>Le mode en ligne haute précision affiche d’abord une dictée immédiate, puis remplace progressivement le texte provisoire par une transcription cloud plus fiable.</p>
+        <strong>Dictée directe + correction locale intelligente</strong>
+        <p>Le texte apparaît avec la dictée Android. Après l’arrêt, un modèle local peut vérifier la transcription sans abonnement et sans envoyer l’audio à un serveur tiers.</p>
       </div>
-      <span id="cloudStatus" class="connection-pill is-neutral">Non configuré</span>
+      <span id="cloudStatus" class="connection-pill is-online">Gratuit</span>
     </section>
 
     <section class="card profile-card reveal">
@@ -63,25 +63,20 @@
     <section class="card transcription-card reveal">
       <div class="section-title">
         <span class="section-index">B</span>
-        <div><h2>Transcription vocale</h2><p>Choisissez le niveau de rapidité, précision et confidentialité adapté à l’audition.</p></div>
+        <div><h2>Transcription vocale</h2><p>Mode recommandé : texte immédiat, dictionnaire adaptatif et contrôle local après l’arrêt.</p></div>
       </div>
 
-      <div class="mode-grid" role="radiogroup" aria-label="Mode de transcription">
+      <div class="mode-grid free-mode-grid" role="radiogroup" aria-label="Mode de transcription">
         <label class="mode-option recommended">
-          <input type="radio" name="speechModeChoice" value="cloud" checked />
+          <input type="radio" name="speechModeChoice" value="android" checked />
           <span class="mode-check"></span>
-          <span class="mode-content"><strong>En ligne haute précision</strong><small>Recommandé. Texte provisoire immédiat, puis correction cloud en continu.</small></span>
+          <span class="mode-content"><strong>Intelligent gratuit — direct + contrôle local</strong><small>Recommandé. Dictée Android immédiate, mots appris localement et vérification Whisper après l’arrêt lorsque le modèle est installé.</small></span>
           <span class="recommended-label">Recommandé</span>
-        </label>
-        <label class="mode-option">
-          <input type="radio" name="speechModeChoice" value="android" />
-          <span class="mode-check"></span>
-          <span class="mode-content"><strong>Dictée Android</strong><small>Rapide, sans service cloud configuré, précision variable selon le téléphone.</small></span>
         </label>
         <label class="mode-option">
           <input type="radio" name="speechModeChoice" value="private" />
           <span class="mode-check"></span>
-          <span class="mode-content"><strong>Mode local privé</strong><small>L’audio reste sur l’appareil. Transcription locale après l’arrêt.</small></span>
+          <span class="mode-content"><strong>Local privé</strong><small>N’utilise pas la dictée réseau. L’audio reste sur le téléphone et le texte est produit après l’arrêt par le modèle local.</small></span>
         </label>
       </div>
 
@@ -90,42 +85,27 @@
         <label>Qualité du micro<select id="microProfile"><option value="near_field" selected>Téléphone à proximité</option><option value="far_field">Téléphone posé à distance</option></select></label>
       </div>
 
-      <div class="cloud-setup" id="cloudSetup">
-        <div class="cloud-setup-head">
-          <div><strong>Service de transcription en ligne</strong><small>Correction continue du texte avec secours automatique par la dictée du téléphone.</small></div>
-          <button id="testCloudBtn" class="btn secondary" type="button">Tester</button>
-        </div>
-        <details class="cloud-config-details">
-          <summary>Configurer le service en ligne</summary>
-          <div class="cloud-config-body">
-            <div class="grid two">
-              <label class="span-2">Adresse sécurisée du service<input id="onlineRelayUrl" inputmode="url" placeholder="wss://votre-service.example.com" /></label>
-              <label class="span-2">Jeton d’accès<input id="onlineRelayToken" type="password" autocomplete="off" placeholder="Jeton du service" /></label>
-            </div>
-            <p class="privacy-note">En mode en ligne, l’audio de la question ou de la réponse est transmis au service configuré. Utilisez cette fonction pour des données réelles uniquement si votre organisation l’autorise.</p>
-          </div>
-        </details>
-      </div>
 
       <details class="advanced-panel" id="advancedTranscription">
         <summary>Paramètres avancés</summary>
         <div class="advanced-body">
-          <label>Dictionnaire prioritaire<textarea id="speechDictionary" rows="5" placeholder="Un mot ou une expression par ligne"></textarea><small>Noms, lieux, fokontany, communes, grades et vocabulaire juridique.</small></label>
+          <label>Dictionnaire prioritaire<textarea id="speechDictionary" rows="5" placeholder="Un mot ou une expression par ligne"></textarea><small>Noms, lieux, fokontany, communes, grades et vocabulaire juridique. Les corrections validées enrichissent aussi une mémoire locale.</small></label>
+          <div class="learning-status"><span>Mémoire de corrections</span><strong id="learnedCorrectionsCount">0 règle apprise</strong><button id="clearLearnedCorrectionsBtn" class="btn ghost compact" type="button">Réinitialiser</button></div>
           <div class="option-list">
             <label class="toggle-row"><input id="autoTranscription" type="checkbox" checked /> Afficher une dictée provisoire immédiatement</label>
-            <label class="toggle-row"><input id="localSpeechOnly" type="checkbox" /> Forcer le moteur Android hors ligne</label>
+            <label class="toggle-row"><input id="localSpeechOnly" type="checkbox" /> Forcer le moteur Android hors ligne (peut être moins précis)</label>
             <label class="toggle-row"><input id="keepLiveAlternative" type="checkbox" checked /> Conserver la transcription provisoire dans le fichier d’audition</label>
             <label class="toggle-row"><input id="learnFromCorrections" type="checkbox" checked /> Enrichir le dictionnaire local à partir des corrections</label>
           </div>
 
           <div class="local-engine-block">
-            <div class="local-engine-head"><div><strong>Transcription locale de secours</strong><small>Utilisée uniquement en mode local privé ou pour une révision manuelle.</small></div></div>
+            <div class="local-engine-head"><div><strong>Correction locale intelligente</strong><small>Gratuite. Whisper relit l’audio après l’arrêt. L’application garde le texte direct si la proposition locale semble moins fiable ou si vous avez déjà commencé à corriger.</small></div></div>
             <div class="grid two">
               <label>Modèle local<select id="whisperModel"><option value="base-q5_1" selected>Base Q5 — plus léger</option><option value="small-q5_1">Small Q5 — plus précis</option></select></label>
               <div class="local-actions"><button id="downloadWhisperBtn" class="btn secondary" type="button">Installer le modèle</button><button id="deleteWhisperBtn" class="btn ghost" type="button">Supprimer</button></div>
             </div>
             <div class="model-status"><strong id="whisperModelStatus">Modèle local non vérifié</strong><small id="whisperModelDetails"></small><div class="progress-track"><div id="whisperProgress" class="progress-bar"></div></div></div>
-            <label class="toggle-row"><input id="aiReviewAfterStop" type="checkbox" /> Réviser automatiquement avec le modèle local après l’arrêt</label>
+            <label class="toggle-row"><input id="aiReviewAfterStop" type="checkbox" checked /> Vérifier automatiquement avec le modèle local après l’arrêt</label>
           </div>
           <select id="speechEngine" hidden><option value="smart">smart</option><option value="live">live</option><option value="offline">offline</option></select>
         </div>
@@ -144,7 +124,7 @@
     </section>
 
     <section class="card exchanges-card reveal">
-      <div class="section-title with-action"><span class="section-index">2</span><div><h2>Questions et réponses</h2><p>Chaque échange conserve le texte final, la dictée provisoire et l’audio original.</p></div><button id="addExchangeBtn" class="btn secondary" type="button">Ajouter un échange</button></div>
+      <div class="section-title with-action"><span class="section-index">2</span><div><h2>Questions et réponses</h2><p>Chaque échange conserve le texte transcrit et l’audio original pour vérification.</p></div><button id="addExchangeBtn" class="btn secondary" type="button">Ajouter un échange</button></div>
       <div id="exchanges" class="exchanges"></div>
     </section>
 
@@ -170,12 +150,12 @@
       <div class="speech-block">
         <div class="speech-heading"><label>FANONTANIANA</label><span class="live-badge question-live-badge" hidden>Texte provisoire</span></div>
         <textarea class="question-text" rows="3" placeholder="Le texte de la question apparaîtra ici pendant que vous parlez."></textarea>
-        <div class="record-row"><button class="record-btn question-record" type="button"><span class="record-icon"><svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Zm-7 9a7 7 0 0 0 14 0M12 19v3m-4 0h8"/></svg></span><span class="record-label">Enregistrer la question</span></button><div class="clip-meta"><span class="clip-status question-status">Aucun audio</span><span class="cloud-quality question-cloud-quality"></span></div><audio class="question-player" controls hidden></audio></div>
+        <div class="record-row"><button class="record-btn question-record" type="button"><span class="record-icon"><svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Zm-7 9a7 7 0 0 0 14 0M12 19v3m-4 0h8"/></svg></span><span class="record-label">Enregistrer la question</span></button><div class="clip-meta"><span class="clip-status question-status">Aucun audio</span><span class="cloud-quality question-cloud-quality"></span></div><audio class="question-player" controls hidden></audio></div><div class="review-tools"><button class="btn ghost compact question-review" type="button" hidden>Vérifier le texte</button><span class="review-note question-review-note"></span></div><div class="review-suggestion question-review-suggestion" hidden><strong>Proposition locale</strong><p class="review-suggestion-text"></p><div><button class="btn secondary compact use-review" data-kind="question" type="button">Utiliser</button><button class="btn ghost compact dismiss-review" data-kind="question" type="button">Garder le texte direct</button></div></div>
       </div>
       <div class="speech-block answer-block">
         <div class="speech-heading"><label>VALINY</label><span class="live-badge answer-live-badge" hidden>Texte provisoire</span></div>
         <textarea class="answer-text" rows="5" placeholder="La réponse apparaîtra ici pendant que la personne parle."></textarea>
-        <div class="record-row"><button class="record-btn answer-record" type="button"><span class="record-icon"><svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Zm-7 9a7 7 0 0 0 14 0M12 19v3m-4 0h8"/></svg></span><span class="record-label">Enregistrer la réponse</span></button><div class="clip-meta"><span class="clip-status answer-status">Aucun audio</span><span class="cloud-quality answer-cloud-quality"></span></div><audio class="answer-player" controls hidden></audio></div>
+        <div class="record-row"><button class="record-btn answer-record" type="button"><span class="record-icon"><svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Zm-7 9a7 7 0 0 0 14 0M12 19v3m-4 0h8"/></svg></span><span class="record-label">Enregistrer la réponse</span></button><div class="clip-meta"><span class="clip-status answer-status">Aucun audio</span><span class="cloud-quality answer-cloud-quality"></span></div><audio class="answer-player" controls hidden></audio></div><div class="review-tools"><button class="btn ghost compact answer-review" type="button" hidden>Vérifier le texte</button><span class="review-note answer-review-note"></span></div><div class="review-suggestion answer-review-suggestion" hidden><strong>Proposition locale</strong><p class="review-suggestion-text"></p><div><button class="btn secondary compact use-review" data-kind="answer" type="button">Utiliser</button><button class="btn ghost compact dismiss-review" data-kind="answer" type="button">Garder le texte direct</button></div></div>
       </div>
       <label class="signature-row"><input class="signature-after" type="checkbox" /> Prévoir une signature après cet échange</label>
     </article>

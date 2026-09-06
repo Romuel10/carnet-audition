@@ -1,0 +1,14 @@
+VÉRIFICATION — CARNET D’AUDITION v3.2.2 BETA.1 GRATUITE INTELLIGENTE
+
+- Aucune clé API incluse.
+- Aucun serveur Render requis.
+- Mode Android direct conservé.
+- Audio WAV natif conservé.
+- Whisper local optionnel conservé et utilisé en arrière-plan.
+- Contrôle automatique activé par défaut mais ne remplace pas aveuglément le texte direct.
+- Mémoire locale de corrections ajoutée.
+- Proposition locale acceptée/refusée par l’utilisateur si elle n’est pas clairement meilleure.
+- Export .pvaud conservé.
+- Profil enquêteur persistant conservé.
+- Icône Android conservée.
+- Workflow GitHub Actions mis à jour pour la v3.2.2.

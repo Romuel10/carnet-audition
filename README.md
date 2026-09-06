@@ -1,57 +1,78 @@
-# Carnet d’audition — Assistant PV Gendarmerie v3.2.0-beta.2
+# Carnet d’audition — v3.2.2 beta.1 gratuite intelligente
 
-Version terrain avec interface professionnelle, audio natif, profil enquêteur persistant, export `.pvaud`, dictée Android de secours et **transcription en ligne réellement temps réel** via un relais sécurisé.
+Cette version reste sans abonnement, sans clé API et sans serveur obligatoire.
 
-## Nouveauté beta.2
+## Principe
 
-Le mode **En ligne haute précision** n’envoie plus des fenêtres audio successives à une API de fichiers. Le relais ouvre désormais une session de transcription Realtime persistante : le texte peut arriver sous forme de deltas pendant que la personne parle. Après l’arrêt, le texte temps réel est immédiatement conservé, puis une révision finale haute précision peut le corriger en arrière-plan.
+Le mode recommandé combine trois niveaux :
 
-Architecture :
+1. **Dictée Android en direct** : le texte apparaît pendant la parole. Le moteur vocal du téléphone peut utiliser le réseau s’il le juge utile.
+2. **Dictionnaire adaptatif** : noms, lieux, fokontany, grades et corrections déjà faites sont renvoyés comme vocabulaire prioritaire aux moteurs compatibles.
+3. **Contrôle local Whisper après l’arrêt** : si un modèle local est installé, l’audio est relu en arrière-plan. L’application compare la proposition Whisper au texte direct au lieu de remplacer aveuglément un texte qui semble meilleur.
 
-```text
-Micro Android (audio original conservé)
-        │
-        ├─ Dictée Android de secours
-        │
-        └─ PCM 16 kHz → relais HTTPS/WSS
-                         │
-                         ├─ Realtime : gpt-live-transcribe
-                         │     → texte en direct
-                         │
-                         └─ Final : gpt-transcribe
-                               → correction après arrêt
-```
+L’audio original reste toujours conservé pour la vérification humaine.
 
-La clé API reste uniquement sur le serveur `relay/`, jamais dans l’APK.
+## Nouveautés v3.2.2
 
-## Mise à jour du dépôt Android
+- correction locale automatique activée par défaut ;
+- la révision Whisper se fait en arrière-plan, donc elle ne bloque plus le passage à la question suivante ;
+- si le texte a été corrigé manuellement pendant la révision, il n’est pas écrasé ;
+- comparaison automatique entre la dictée directe et la proposition locale ;
+- proposition alternative visible avec **Utiliser** ou **Garder le texte direct** ;
+- bouton **Vérifier le texte** pour relancer manuellement le contrôle d’un audio ;
+- mémoire locale de corrections : l’application apprend certaines corrections de noms et lieux et les applique lors des auditions suivantes ;
+- les mots appris sont aussi ajoutés au contexte prioritaire transmis à la dictée Android et à Whisper ;
+- aucune donnée de cette mémoire n’est envoyée à un serveur par l’application ;
+- export `.pvaud` inchangé : texte, audio, profil enquêteur et métadonnées de transcription restent importables sur le logiciel PC.
 
-Après décompression :
+## Modèle local
+
+Dans **Paramètres avancés → Correction locale intelligente** :
+
+- **Base Q5** : recommandé sur un téléphone modeste, téléchargement d’environ 57 MiB ;
+- **Small Q5** : plus lourd et plus lent, mais peut être plus précis, environ 181 MiB.
+
+Le modèle est téléchargé une fois. Une fois installé, la correction Whisper fonctionne localement.
+
+## Réglage recommandé
+
+- Mode : **Intelligent gratuit — direct + contrôle local**
+- Langue : **Malagasy**
+- Qualité du micro : **Téléphone à proximité**
+- Dictée provisoire : activée
+- Forcer hors ligne : désactivé
+- Vérification locale automatique : activée
+- Apprentissage des corrections : activé
+- Modèle : **Base Q5** pour commencer
+
+## Mise à jour du dépôt GitHub
+
+Après avoir décompressé ce dossier dans `Download` :
 
 ```bash
 cd ~/carnet-audition
-cp -r /sdcard/Download/carnet-audition-mobile-v3.2.0-beta2/. .
+cp -r /sdcard/Download/carnet-audition-mobile-v3.2.2-beta1-gratuite-intelligente/. .
 npm install
 git add -A
-git commit -m "Realtime online Malagasy transcription v3.2 beta2"
+git commit -m "Carnet v3.2.2 correction locale intelligente"
 git push origin main
 ```
 
 GitHub Actions produit l’artifact :
 
-`Carnet-audition-v3.2-beta2-debug-apk`
+`Carnet-audition-v3.2.2-gratuite-intelligente-beta1-debug-apk`
 
-## Relais en ligne
+## Test conseillé
 
-Le dossier `relay/` contient la version 1.1.0. Déployez **ce dossier seul** dans un dépôt séparé ou placez son contenu à la racine du dépôt du relais. Les étapes Render sont décrites dans `relay/README.md`.
+1. Installer l’APK.
+2. Ouvrir **Paramètres avancés**.
+3. Installer **Base Q5**.
+4. Enregistrer une Question de 10 à 20 secondes en Malagasy.
+5. Appuyer sur Arrêter : le texte direct reste immédiatement disponible.
+6. Continuer l’audition si nécessaire pendant que le contrôle local travaille en arrière-plan.
+7. Vérifier si une proposition locale apparaît et choisir de l’utiliser ou non.
+8. Corriger manuellement un nom de lieu mal reconnu, quitter le champ, puis refaire une phrase avec ce nom : la mémoire locale doit progressivement l’aider.
 
-Dans l’application :
+## Limite importante
 
-1. choisissez **En ligne haute précision** ;
-2. renseignez l’URL HTTPS/WSS du relais ;
-3. renseignez le même `APP_SHARED_SECRET` ;
-4. appuyez sur **Tester la connexion** ;
-5. choisissez Malagasy ;
-6. commencez une Question ou une Réponse.
-
-Pour une vraie audition, le mode en ligne transmet le flux audio au service de transcription configuré. Utilisez-le uniquement si le cadre de confidentialité de votre unité l’autorise. L’audio original reste enregistré sur le téléphone même en cas de coupure réseau.
+Une transcription automatique ne doit pas être considérée comme la version juridique définitive d’une audition. Le texte doit être relu et les passages douteux vérifiés avec l’audio original avant intégration au procès-verbal.
