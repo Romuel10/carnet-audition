@@ -1,0 +1,14 @@
+Carnet d’audition v3.3.0-beta.1
+- Interface terrain modernisée, sans emojis
+- Navigation basse et résumé de session
+- Profil enquêteur mémorisé
+- Audio + dictée directe conservés
+- Correction locale Whisper facultative
+- Export .pvaud conservé
+- Connexion directe au logiciel PC sur réseau local
+- Adresse PC + code à 8 caractères
+- Test de liaison avant envoi
+- Chiffrement AES-256-GCM du paquet avant transfert
+- Transfert texte + audio via même format de paquet que .pvaud
+- Permission INTERNET et HTTP local autorisé dans AndroidManifest lors du build
+- Aucun cloud/API/abonnement requis

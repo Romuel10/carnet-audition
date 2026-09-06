@@ -1,9 +1,10 @@
 (() => {
-  const APP_VERSION = '3.2.2-beta.1';
+  const APP_VERSION = '3.3.0-beta.1';
   const STORAGE_KEY = 'assistant-pv-carnet-draft-v1';
   const PROFILE_KEY = 'assistant-pv-carnet-investigator-profile-v1';
   const AI_SETTINGS_KEY = 'assistant-pv-carnet-ai-settings-v1';
   const LEARNED_CORRECTIONS_KEY = 'assistant-pv-carnet-learned-corrections-v1';
+  const PC_CONNECTION_KEY = 'assistant-pv-carnet-pc-connection-v1';
   const DEFAULT_DICTIONARY = `gendarmerie
 brigade
 OPJ
@@ -76,7 +77,7 @@ Madagasikara`;
 
   const NativeAudioRecorder = resolveNativeAudioRecorder();
   const NativeWhisper = resolveNativeWhisper();
-  const state = { exchanges: [], activeRecording: null, stream: null, saveTimer: null, profile: null, whisperPoll: null, lastCloudCheck: null, learnedCorrections: loadLearnedCorrections(), reviewJobs: new Map() };
+  const state = { exchanges: [], activeRecording: null, stream: null, saveTimer: null, profile: null, whisperPoll: null, lastCloudCheck: null, learnedCorrections: loadLearnedCorrections(), reviewJobs: new Map(), pcConnected: false };
   const $ = (s, root = document) => root.querySelector(s);
   const $$ = (s, root = document) => [...root.querySelectorAll(s)];
   const uid = () => globalThis.crypto?.randomUUID?.() || `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -97,6 +98,9 @@ Madagasikara`;
     updateSpeechSupportMessage();
     refreshWhisperStatus().catch(() => {});
     updateLearnedCorrectionsCount();
+    loadPcConnection();
+    updateSessionOverview();
+    bindBottomNavigation();
   }
 
   function bindGeneral() {
@@ -123,6 +127,13 @@ Madagasikara`;
       persistAiSettings();
       scheduleSave();
     }));
+    $('#testPcConnectionBtn')?.addEventListener('click', testPcConnection);
+    $('#sendToPcBtn')?.addEventListener('click', sendToPc);
+    $('#sendToPcBottomBtn')?.addEventListener('click', sendToPc);
+    $('#pcBridgeUrl')?.addEventListener('input', () => { state.pcConnected = false; savePcConnection(); updatePcConnectionUi(); });
+    $('#pcBridgeCode')?.addEventListener('input', (event) => { event.target.value = event.target.value.toUpperCase().replace(/[^A-Z2-9]/g, '').slice(0, 8); state.pcConnected = false; savePcConnection(); updatePcConnectionUi(); });
+    ['personIdentity','personRole','place','identityVerification','startDateTime','endDateTime'].forEach(id => $('#'+id)?.addEventListener('input', updateSessionOverview));
+    document.addEventListener('change', updateSessionOverview);
   }
 
   function getSpeechMode() {
@@ -646,6 +657,7 @@ Madagasikara`;
       hydratePlayer(exchange, 'question');
       hydratePlayer(exchange, 'answer');
     });
+    updateSessionOverview();
   }
 
   function bindExchangeCard(card, exchange) {
@@ -702,7 +714,7 @@ Madagasikara`;
 
   async function startRecording(exchange, kind, card) {
     if (NativeAudioRecorder) return startNativeRecording(exchange, kind, card);
-    if (isNativeAndroid) throw new Error('Pont audio natif indisponible. Réinstallez la v3.2.2 gratuite intelligente puis relancez l’application.');
+    if (isNativeAndroid) throw new Error('Pont audio natif indisponible. Réinstallez la v3.3 beta.1 puis relancez l’application.');
     return startWebRecording(exchange, kind, card);
   }
 
@@ -1203,7 +1215,7 @@ Madagasikara`;
   async function runNativeDiagnostics() {
     const el = $('#exportStatus');
     if (!NativeAudioRecorder) {
-      el.textContent = 'ERREUR : pont audio natif indisponible. Vérifiez que la v3.2.2 est bien installée.';
+      el.textContent = 'ERREUR : pont audio natif indisponible. Vérifiez que la v3.3 est bien installée.';
       return;
     }
     try {
@@ -1299,6 +1311,7 @@ Madagasikara`;
   }
 
   function saveDraft() {
+    updateSessionOverview();
     localStorage.setItem(STORAGE_KEY, JSON.stringify(collectDraft()));
     $('#saveState').textContent = 'Brouillon enregistré';
   }
@@ -1326,6 +1339,219 @@ Madagasikara`;
     state.exchanges = Array.isArray(d.exchanges) ? d.exchanges.map(makeExchange) : [];
   }
 
+  function normalizePcBridgeUrl(value) {
+    let url = String(value || '').trim().replace(/\/+$/, '');
+    if (!url) return '';
+    if (!/^https?:\/\//i.test(url)) url = `http://${url}`;
+    return url;
+  }
+
+  function loadPcConnection() {
+    let cfg = {};
+    try { cfg = JSON.parse(localStorage.getItem(PC_CONNECTION_KEY) || '{}') || {}; } catch (_) { cfg = {}; }
+    if ($('#pcBridgeUrl')) $('#pcBridgeUrl').value = cfg.url || '';
+    if ($('#pcBridgeCode')) $('#pcBridgeCode').value = cfg.code || '';
+    state.pcConnected = false;
+    updatePcConnectionUi();
+  }
+
+  function savePcConnection() {
+    const cfg = { url: normalizePcBridgeUrl($('#pcBridgeUrl')?.value), code: String($('#pcBridgeCode')?.value || '').trim() };
+    localStorage.setItem(PC_CONNECTION_KEY, JSON.stringify(cfg));
+  }
+
+  function updatePcConnectionUi(statusText = '') {
+    const badge = $('#pcConnectionBadge');
+    const status = $('#pcConnectionStatus');
+    if (!badge || !status) return;
+    badge.className = `connection-badge ${state.pcConnected ? 'is-online' : 'is-offline'}`;
+    badge.textContent = state.pcConnected ? 'Connecté au PC' : 'Non connecté';
+    if (statusText) status.textContent = statusText;
+  }
+
+  function pcConnectionConfig() {
+    const url = normalizePcBridgeUrl($('#pcBridgeUrl')?.value);
+    const code = String($('#pcBridgeCode')?.value || '').trim();
+    if (!url) throw new Error('Saisissez l’adresse affichée sur le logiciel PC.');
+    if (!/^[A-HJ-NP-Z2-9]{8}$/.test(code)) throw new Error('Le code de jumelage doit contenir 8 caractères.');
+    return { url, code };
+  }
+
+  async function mobileBridgeProof(code) {
+    if (!globalThis.crypto?.subtle) throw new Error('Le chiffrement local n’est pas disponible sur ce WebView Android.');
+    const bytes = new TextEncoder().encode(`assistant-pv-local-bridge-v1|${code}`);
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+    return [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('');
+  }
+
+  function bytesToBase64(bytes) {
+    const source = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const chunkSize = 0x8000;
+    let binary = '';
+    for (let offset = 0; offset < source.length; offset += chunkSize) {
+      const chunk = source.subarray(offset, Math.min(offset + chunkSize, source.length));
+      binary += String.fromCharCode(...chunk);
+    }
+    return btoa(binary);
+  }
+
+  async function encryptForPc(payload, code) {
+    if (!globalThis.crypto?.subtle) throw new Error('Le chiffrement local n’est pas disponible sur cet appareil.');
+    const salt = globalThis.crypto.getRandomValues(new Uint8Array(16));
+    const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
+    const material = await globalThis.crypto.subtle.importKey('raw', new TextEncoder().encode(code), 'PBKDF2', false, ['deriveKey']);
+    const key = await globalThis.crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 120000, hash: 'SHA-256' }, material, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+    const additionalData = new TextEncoder().encode('assistant-pv-audition-v1');
+    const plaintext = new TextEncoder().encode(JSON.stringify(payload));
+    const encrypted = await globalThis.crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData, tagLength: 128 }, key, plaintext);
+    return { schema: 'mg.assistantpv.local-transfer/1', salt: bytesToBase64(salt), iv: bytesToBase64(iv), ciphertext: bytesToBase64(new Uint8Array(encrypted)) };
+  }
+
+  async function testPcConnection() {
+    const badge = $('#pcConnectionBadge');
+    const status = $('#pcConnectionStatus');
+    try {
+      const { url, code } = pcConnectionConfig();
+      savePcConnection();
+      state.pcConnected = false;
+      badge.className = 'connection-badge is-testing';
+      badge.textContent = 'Connexion…';
+      status.className = 'pc-link-status testing';
+      status.textContent = 'Vérification de la liaison locale…';
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 6000);
+      const proof = await mobileBridgeProof(code);
+      const response = await fetch(`${url}/api/v1/ping`, { headers: { 'X-Assistant-PV-Proof': proof }, cache: 'no-store', signal: controller.signal });
+      clearTimeout(timer);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) throw new Error(data.error || `Connexion refusée (${response.status}).`);
+      state.pcConnected = true;
+      badge.className = 'connection-badge is-online';
+      badge.textContent = 'Connecté au PC';
+      status.className = 'pc-link-status success';
+      status.textContent = 'Liaison locale prête. Vous pouvez envoyer l’audition directement au logiciel.';
+      toast('Connexion au logiciel établie.');
+      return true;
+    } catch (error) {
+      state.pcConnected = false;
+      badge.className = 'connection-badge is-offline';
+      badge.textContent = 'Non connecté';
+      status.className = 'pc-link-status error';
+      status.textContent = error?.name === 'AbortError' ? 'Le PC ne répond pas. Vérifiez que les deux appareils sont sur le même réseau et que la liaison est démarrée.' : (error.message || String(error));
+      toast('Connexion au PC impossible.');
+      return false;
+    }
+  }
+
+  async function buildAuditionPayload() {
+    const questions = [];
+    for (const exchange of state.exchanges) {
+      const keepLive = $('#keepLiveAlternative')?.checked !== false;
+      const item = { question: exchange.question, answer: exchange.answer, signatureAfter: exchange.signatureAfter, transcription: { question: { live: keepLive ? (exchange.questionLiveTranscript || '') : '', cloud: exchange.questionCloudTranscript || '', cloudModel: exchange.questionCloudModel || '', cloudLatencyMs: exchange.questionCloudLatencyMs || 0, ai: exchange.questionAiTranscript || '', model: exchange.questionAiModel || '', elapsedMs: exchange.questionAiElapsedMs || 0 }, answer: { live: keepLive ? (exchange.answerLiveTranscript || '') : '', cloud: exchange.answerCloudTranscript || '', cloudModel: exchange.answerCloudModel || '', cloudLatencyMs: exchange.answerCloudLatencyMs || 0, ai: exchange.answerAiTranscript || '', model: exchange.answerAiModel || '', elapsedMs: exchange.answerAiElapsedMs || 0 } } };
+      for (const kind of ['question','answer']) {
+        const audioPath = exchange[`${kind}AudioPath`];
+        if (audioPath && isNativeAndroid && NativeAudioRecorder?.readAudioFile) {
+          const audio = await NativeAudioRecorder.readAudioFile({ path: audioPath });
+          if (audio?.dataBase64) {
+            item[`${kind}Audio`] = { clipId: `${exchange.id}-${kind}`, mimeType: audio.mimeType || exchange[`${kind}MimeType`] || 'audio/wav', durationMs: exchange[`${kind}DurationMs`] || 0, dataBase64: audio.dataBase64 };
+            continue;
+          }
+        }
+        const clipId = exchange[`${kind}ClipId`];
+        if (!clipId) continue;
+        const blob = await getClip(clipId);
+        if (!blob) continue;
+        item[`${kind}Audio`] = { clipId, mimeType: blob.type || exchange[`${kind}MimeType`] || 'audio/wav', durationMs: exchange[`${kind}DurationMs`] || 0, dataBase64: await blobToBase64(blob) };
+      }
+      questions.push(item);
+    }
+    return {
+      schema: 'mg.assistantpv.audition/1',
+      appVersion: APP_VERSION,
+      exportedAt: new Date().toISOString(),
+      speechLanguage: $('#speechLanguage').value,
+      speechMode: { mode: getSpeechMode(), automatic: $('#autoTranscription').checked, preferOffline: $('#localSpeechOnly').checked, localOnly: getSpeechMode() === 'private', engine: $('#speechEngine')?.value || 'smart', onlineConfigured: false, onlineProvider: '', microProfile: $('#microProfile')?.value || 'near_field', whisperModel: $('#whisperModel')?.value || '', whisperReview: $('#aiReviewAfterStop')?.checked === true, learnedCorrections: $('#learnFromCorrections')?.checked !== false, vocabulary: buildBiasingText().split(/\n+/).filter(Boolean) },
+      investigator: { grade: state.profile.grade, name: state.profile.name, quality: state.profile.quality, function: state.profile.function, unit: state.profile.unit || '' },
+      audition: { personRole: $('#personRole').value, personIdentity: $('#personIdentity').value, identityVerification: $('#identityVerification').value, place: $('#place').value, startDateTime: $('#startDateTime').value, endDateTime: $('#endDateTime').value, closingFormula: $('#closingFormula').value, personSignatureLabel: $('#personSignatureLabel').value, verbalisateurLabel: 'LE VERBALISATEUR', questions },
+    };
+  }
+
+  async function sendToPc() {
+    if (state.activeRecording) return toast('Arrêtez l’enregistrement avant le transfert.');
+    if (!state.profile) return toast('Enregistrez d’abord votre profil enquêteur.');
+    if (!state.exchanges.some(x => x.question.trim() || x.answer.trim())) return toast('Ajoutez au moins une question ou une réponse.');
+    const buttons = [$('#sendToPcBtn'), $('#sendToPcBottomBtn')].filter(Boolean);
+    buttons.forEach(button => { button.disabled = true; button.dataset.originalText = button.textContent; button.textContent = 'Préparation…'; });
+    const status = $('#pcConnectionStatus');
+    try {
+      const { url, code } = pcConnectionConfig();
+      if (!state.pcConnected) {
+        const ok = await testPcConnection();
+        if (!ok) return;
+      }
+      buttons.forEach(button => { button.textContent = 'Transfert en cours…'; });
+      status.className = 'pc-link-status testing';
+      status.textContent = 'Préparation des textes et des audios puis transfert vers le PC…';
+      const payload = await buildAuditionPayload();
+      status.textContent = 'Chiffrement local de l’audition avant transfert…';
+      const envelope = await encryptForPc(payload, code);
+      const proof = await mobileBridgeProof(code);
+      status.textContent = 'Transfert chiffré vers le logiciel…';
+      const response = await fetch(`${url}/api/v1/audition`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Assistant-PV-Proof': proof },
+        body: JSON.stringify(envelope),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) throw new Error(data.error || `Transfert refusé (${response.status}).`);
+      state.pcConnected = true;
+      updatePcConnectionUi();
+      status.className = 'pc-link-status success';
+      status.textContent = `Audition reçue par le PC : ${data.exchanges || payload.audition.questions.length} échange(s), ${data.attachments || 0} audio(s).`;
+      $('#exportStatus').textContent = 'Dernier transfert : audition envoyée directement au logiciel sur le réseau local.';
+      toast('Audition envoyée au logiciel.');
+    } catch (error) {
+      state.pcConnected = false;
+      updatePcConnectionUi();
+      status.className = 'pc-link-status error';
+      status.textContent = error.message || String(error);
+      toast('Transfert au PC impossible. Le fichier .pvaud reste disponible.');
+    } finally {
+      buttons.forEach(button => { button.disabled = false; button.textContent = button.dataset.originalText || 'Envoyer au PC'; });
+    }
+  }
+
+  function updateSessionOverview() {
+    const identity = String($('#personIdentity')?.value || '').trim().split(/\n+/)[0];
+    const role = $('#personRole')?.value || 'Personne entendue';
+    const place = String($('#place')?.value || '').trim();
+    const audioCount = state.exchanges.reduce((count, exchange) => count + Number(Boolean(exchange.questionAudioPath || exchange.questionClipId)) + Number(Boolean(exchange.answerAudioPath || exchange.answerClipId)), 0);
+    const contentCount = state.exchanges.reduce((count, exchange) => count + Number(Boolean(exchange.question.trim())) + Number(Boolean(exchange.answer.trim())), 0);
+    const possible = Math.max(2, state.exchanges.length * 2);
+    const contextScore = Number(Boolean(identity)) + Number(Boolean(place)) + Number(Boolean($('#startDateTime')?.value));
+    const progress = Math.min(100, Math.round(((contentCount + contextScore) / (possible + 3)) * 100));
+    if ($('#sessionPersonLabel')) $('#sessionPersonLabel').textContent = identity || role || 'Nouvelle audition';
+    if ($('#sessionPlaceLabel')) $('#sessionPlaceLabel').textContent = [role, place].filter(Boolean).join(' • ') || 'Contexte à renseigner';
+    if ($('#sessionExchangeCount')) $('#sessionExchangeCount').textContent = String(state.exchanges.length || 0);
+    if ($('#sessionAudioCount')) $('#sessionAudioCount').textContent = String(audioCount);
+    if ($('#sessionProgress')) $('#sessionProgress').textContent = `${progress}%`;
+  }
+
+  function bindBottomNavigation() {
+    const links = $$('.bottom-nav a');
+    const activate = (link) => links.forEach(item => item.classList.toggle('active', item === link));
+    links.forEach(link => link.addEventListener('click', () => activate(link)));
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver((entries) => {
+        const visible = entries.filter(entry => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        if (!visible) return;
+        const link = links.find(item => item.dataset.navTarget === visible.target.id);
+        if (link) activate(link);
+      }, { rootMargin: '-22% 0px -58% 0px', threshold: [0.05, 0.25, 0.55] });
+      ['identitySection','auditionSection','connectionSection','transcriptionSection'].forEach(id => { const section = $('#'+id); if (section) observer.observe(section); });
+    }
+  }
+
   async function exportPackage() {
     if (state.activeRecording) return toast('Arrêtez l’enregistrement avant de sauvegarder le fichier.');
     if (!state.profile) return toast('Enregistrez d’abord votre profil enquêteur.');
@@ -1334,63 +1560,8 @@ Madagasikara`;
     $('#exportBtn').disabled = true;
     $('#exportStatus').textContent = 'Préparation du fichier et des audios…';
     try {
-      const questions = [];
-      for (const exchange of state.exchanges) {
-        const keepLive = $('#keepLiveAlternative')?.checked !== false;
-        const item = { question: exchange.question, answer: exchange.answer, signatureAfter: exchange.signatureAfter, transcription: { question: { live: keepLive ? (exchange.questionLiveTranscript || '') : '', cloud: exchange.questionCloudTranscript || '', cloudModel: exchange.questionCloudModel || '', cloudLatencyMs: exchange.questionCloudLatencyMs || 0, ai: exchange.questionAiTranscript || '', model: exchange.questionAiModel || '', elapsedMs: exchange.questionAiElapsedMs || 0 }, answer: { live: keepLive ? (exchange.answerLiveTranscript || '') : '', cloud: exchange.answerCloudTranscript || '', cloudModel: exchange.answerCloudModel || '', cloudLatencyMs: exchange.answerCloudLatencyMs || 0, ai: exchange.answerAiTranscript || '', model: exchange.answerAiModel || '', elapsedMs: exchange.answerAiElapsedMs || 0 } } };
-        for (const kind of ['question','answer']) {
-          const audioPath = exchange[`${kind}AudioPath`];
-          if (audioPath && isNativeAndroid && NativeAudioRecorder?.readAudioFile) {
-            const audio = await NativeAudioRecorder.readAudioFile({ path: audioPath });
-            if (audio?.dataBase64) {
-              item[`${kind}Audio`] = {
-                clipId: `${exchange.id}-${kind}`,
-                mimeType: audio.mimeType || exchange[`${kind}MimeType`] || 'audio/wav',
-                durationMs: exchange[`${kind}DurationMs`] || 0,
-                dataBase64: audio.dataBase64,
-              };
-              continue;
-            }
-          }
-          const clipId = exchange[`${kind}ClipId`];
-          if (!clipId) continue;
-          const blob = await getClip(clipId);
-          if (!blob) continue;
-          item[`${kind}Audio`] = {
-            clipId,
-            mimeType: blob.type || exchange[`${kind}MimeType`] || 'audio/wav',
-            durationMs: exchange[`${kind}DurationMs`] || 0,
-            dataBase64: await blobToBase64(blob),
-          };
-        }
-        questions.push(item);
-      }
-      const payload = {
-        schema: 'mg.assistantpv.audition/1',
-        appVersion: APP_VERSION,
-        exportedAt: new Date().toISOString(),
-        speechLanguage: $('#speechLanguage').value,
-        speechMode: { mode: getSpeechMode(), automatic: $('#autoTranscription').checked, preferOffline: $('#localSpeechOnly').checked, localOnly: getSpeechMode() === 'private', engine: $('#speechEngine')?.value || 'smart', onlineConfigured: cloudConfigured(), onlineProvider: '', microProfile: $('#microProfile')?.value || 'near_field', whisperModel: $('#whisperModel')?.value || '', whisperReview: $('#aiReviewAfterStop')?.checked === true, learnedCorrections: $('#learnFromCorrections')?.checked !== false, vocabulary: buildBiasingText().split(/\n+/).filter(Boolean) },
-        investigator: {
-          grade: state.profile.grade,
-          name: state.profile.name,
-          quality: state.profile.quality,
-          function: state.profile.function,
-          unit: state.profile.unit || '',
-        },
-        audition: {
-          personRole: $('#personRole').value,
-          personIdentity: $('#personIdentity').value,
-          identityVerification: $('#identityVerification').value,
-          place: $('#place').value,
-          startDateTime: $('#startDateTime').value,
-          endDateTime: $('#endDateTime').value,
-          closingFormula: $('#closingFormula').value,
-          personSignatureLabel: $('#personSignatureLabel').value,
-          verbalisateurLabel: 'LE VERBALISATEUR',
-          questions,
-        },
-      };
+      const payload = await buildAuditionPayload();
+      const questions = payload.audition.questions;
       const json = JSON.stringify(payload);
       const blob = new Blob([json], { type: 'application/json' });
       const person = safeFilePart(($('#personIdentity').value.split(/\n/)[0] || 'audition').slice(0,50));

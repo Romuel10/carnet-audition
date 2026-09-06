@@ -17,7 +17,7 @@
       <img src="icon.png" alt="" class="app-icon" />
       <div class="brand-copy">
         <span class="kicker">ASSISTANT PV GENDARMERIE</span>
-        <div class="title-line"><h1>Carnet d’audition</h1><span class="version-badge">v3.2.2 gratuite intelligente</span></div>
+        <div class="title-line"><h1>Carnet d’audition</h1><span class="version-badge">v3.3 beta.1</span></div>
       </div>
     </div>
     <div class="header-state">
@@ -38,7 +38,39 @@
       <span id="cloudStatus" class="connection-pill is-online">Gratuit</span>
     </section>
 
-    <section class="card profile-card reveal">
+    <section class="session-overview reveal" aria-label="Résumé de l’audition">
+      <div class="overview-main">
+        <span class="overview-label">SESSION EN COURS</span>
+        <strong id="sessionPersonLabel">Nouvelle audition</strong>
+        <span id="sessionPlaceLabel">Contexte à renseigner</span>
+      </div>
+      <div class="overview-metrics">
+        <div><strong id="sessionExchangeCount">1</strong><span>échange</span></div>
+        <div><strong id="sessionAudioCount">0</strong><span>audio</span></div>
+        <div><strong id="sessionProgress">0%</strong><span>complété</span></div>
+      </div>
+    </section>
+
+    <section id="connectionSection" class="card connection-card reveal">
+      <div class="section-title with-action">
+        <span class="section-index connection-index">PC</span>
+        <div><h2>Connexion au logiciel</h2><p>Transfert direct chiffré sur le réseau local, sans cloud et sans abonnement.</p></div>
+        <span id="pcConnectionBadge" class="connection-badge is-offline">Non connecté</span>
+      </div>
+      <div class="pc-link-layout">
+        <div class="pc-link-fields">
+          <label>Adresse affichée sur le PC<input id="pcBridgeUrl" inputmode="url" autocomplete="off" placeholder="Ex. http://192.168.1.20:17873" /></label>
+          <label>Code de jumelage<input id="pcBridgeCode" inputmode="text" maxlength="8" autocomplete="one-time-code" autocapitalize="characters" placeholder="8 caractères" /></label>
+        </div>
+        <div class="pc-link-actions">
+          <button id="testPcConnectionBtn" class="btn secondary" type="button">Tester la connexion</button>
+          <button id="sendToPcBtn" class="btn primary" type="button">Envoyer l’audition au PC</button>
+        </div>
+      </div>
+      <div id="pcConnectionStatus" class="pc-link-status">Sur le PC : Carnet d’audition → Démarrer la liaison locale. Le téléphone et le PC doivent être sur le même Wi-Fi ou point d’accès. Le contenu est chiffré avant l’envoi.</div>
+    </section>
+
+    <section id="profileSection" class="card profile-card reveal">
       <div class="section-title with-action">
         <span class="section-index">A</span>
         <div><h2>Profil de l’enquêteur</h2><p>Enregistré sur cet appareil et réutilisé automatiquement.</p></div>
@@ -60,7 +92,7 @@
       </div>
     </section>
 
-    <section class="card transcription-card reveal">
+    <section id="transcriptionSection" class="card transcription-card reveal">
       <div class="section-title">
         <span class="section-index">B</span>
         <div><h2>Transcription vocale</h2><p>Mode recommandé : texte immédiat, dictionnaire adaptatif et contrôle local après l’arrêt.</p></div>
@@ -112,7 +144,7 @@
       </details>
     </section>
 
-    <section class="card identity-card reveal">
+    <section id="identitySection" class="card identity-card reveal">
       <div class="section-title"><span class="section-index">1</span><div><h2>Contexte de l’audition</h2><p>Informations destinées au dossier et à l’import sur le poste de travail.</p></div></div>
       <div class="grid two">
         <label>Qualité de la personne<select id="personRole"><option>Victime</option><option>Témoin</option><option>Auteur présumé</option><option>Personne soupçonnée</option><option>Personne mise en cause</option><option selected>Personne entendue</option><option>Autre</option></select></label>
@@ -123,12 +155,12 @@
       </div>
     </section>
 
-    <section class="card exchanges-card reveal">
+    <section id="auditionSection" class="card exchanges-card reveal">
       <div class="section-title with-action"><span class="section-index">2</span><div><h2>Questions et réponses</h2><p>Chaque échange conserve le texte transcrit et l’audio original pour vérification.</p></div><button id="addExchangeBtn" class="btn secondary" type="button">Ajouter un échange</button></div>
       <div id="exchanges" class="exchanges"></div>
     </section>
 
-    <section class="card closing-card reveal">
+    <section id="closingSection" class="card closing-card reveal">
       <div class="section-title"><span class="section-index">3</span><div><h2>Clôture</h2><p>Relisez le texte et vérifiez les passages incertains à l’écoute.</p></div></div>
       <div class="grid two">
         <label>Fin de l’audition<input id="endDateTime" type="datetime-local" /></label>
@@ -137,9 +169,9 @@
       </div>
     </section>
 
-    <section class="export-card card reveal">
+    <section id="transferSection" class="export-card card reveal">
       <div class="export-copy"><span class="file-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7zM14 3v5h5M9 13h6m-6 4h6"/></svg></span><div><h2>Fichier d’audition</h2><p>Enregistre le texte, le profil de l’enquêteur, les métadonnées de transcription et tous les audios dans un fichier <code>.pvaud</code> importable sur le PC.</p></div></div>
-      <div class="export-actions"><button id="exportBtn" class="btn primary large" type="button">Enregistrer le fichier .pvaud</button><button id="newBtn" class="btn ghost" type="button">Nouvelle audition</button></div>
+      <div class="export-actions"><button id="sendToPcBottomBtn" class="btn primary large" type="button">Envoyer directement au PC</button><button id="exportBtn" class="btn secondary large" type="button">Enregistrer le fichier .pvaud</button><button id="newBtn" class="btn ghost" type="button">Nouvelle audition</button></div>
       <div id="exportStatus" class="export-status"></div>
     </section>
   </main>
@@ -160,6 +192,13 @@
       <label class="signature-row"><input class="signature-after" type="checkbox" /> Prévoir une signature après cet échange</label>
     </article>
   </template>
+
+  <nav class="bottom-nav" aria-label="Navigation rapide">
+    <a href="#identitySection" data-nav-target="identitySection"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h7"/></svg><span>Dossier</span></a>
+    <a href="#auditionSection" data-nav-target="auditionSection" class="active"><svg viewBox="0 0 24 24"><path d="M12 4a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V7a3 3 0 0 0-3-3ZM6 12a6 6 0 0 0 12 0M12 18v3"/></svg><span>Audition</span></a>
+    <a href="#connectionSection" data-nav-target="connectionSection"><svg viewBox="0 0 24 24"><path d="M8 12a4 4 0 0 1 4-4h4a4 4 0 0 1 0 8h-2M16 12a4 4 0 0 1-4 4H8a4 4 0 0 1 0-8h2"/></svg><span>Connexion</span></a>
+    <a href="#transcriptionSection" data-nav-target="transcriptionSection"><svg viewBox="0 0 24 24"><path d="M4 7h10M4 12h16M4 17h7M18 4v6m-3-3h6"/></svg><span>Réglages</span></a>
+  </nav>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="app.js"></script>

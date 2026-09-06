@@ -17,6 +17,13 @@ let manifestText = fs.readFileSync(manifest, 'utf8');
 if (!manifestText.includes('android.permission.RECORD_AUDIO')) {
   manifestText = manifestText.replace(/<manifest([^>]*)>/, '<manifest$1>\n    <uses-permission android:name="android.permission.RECORD_AUDIO" />');
 }
+if (!manifestText.includes('android.permission.INTERNET')) {
+  manifestText = manifestText.replace(/<manifest([^>]*)>/, '<manifest$1>\n    <uses-permission android:name="android.permission.INTERNET" />');
+}
+// Autorise uniquement le transport HTTP nécessaire à la liaison locale avec le logiciel PC.
+if (!/android:usesCleartextTraffic=/.test(manifestText)) {
+  manifestText = manifestText.replace(/<application\b/, '<application android:usesCleartextTraffic="true"');
+}
 // SpeechRecognizer doit être découvrable sur Android 11+.
 if (!manifestText.includes('android.speech.RecognitionService')) {
   manifestText = manifestText.replace(/<application\b/, '    <queries>\n        <intent>\n            <action android:name="android.speech.RecognitionService" />\n        </intent>\n    </queries>\n\n    <application');
@@ -673,5 +680,5 @@ public class MainActivity extends BridgeActivity {
 `;
 fs.writeFileSync(mainActivity, activitySource);
 
-console.log('Enregistreur Android natif v3.2.2 beta.1 intégré :', pluginFile);
+console.log('Enregistreur Android natif v3.3 beta.1 intégré :', pluginFile);
 console.log('Audio WAV + dictée Android + flux PCM optionnel pour transcription en ligne sécurisée.');

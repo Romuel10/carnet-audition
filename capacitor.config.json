@@ -2,5 +2,10 @@
   "appId": "mg.assistantpv.carnet",
   "appName": "Carnet d'audition",
   "webDir": "www",
-  "server": { "androidScheme": "https" }
+  "android": {
+    "allowMixedContent": true
+  },
+  "server": {
+    "cleartext": true
+  }
 }

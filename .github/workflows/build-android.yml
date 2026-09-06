@@ -52,6 +52,8 @@ jobs:
           grep -n "drainPcmChunks" android/app/src/main/java/mg/assistantpv/carnet/NativeAudioRecorderPlugin.java
           grep -n "NativeWhisperPlugin" android/app/src/main/java/mg/assistantpv/carnet/MainActivity.java
           grep -n "assistant_pv_icon" android/app/src/main/AndroidManifest.xml
+          grep -n "android.permission.INTERNET" android/app/src/main/AndroidManifest.xml
+          grep -n "usesCleartextTraffic=\"true\"" android/app/src/main/AndroidManifest.xml
           grep -n "src/main/jni/whisper/CMakeLists.txt" android/app/build.gradle
 
       - name: Build debug APK
@@ -61,5 +63,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Carnet-audition-v3.2.2-gratuite-intelligente-beta1-debug-apk
+          name: Carnet-audition-v3.3-beta1-connecte-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
