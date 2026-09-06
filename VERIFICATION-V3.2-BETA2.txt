@@ -1,0 +1,14 @@
+Carnet d'audition v3.2.0-beta.2
+
+Vérifications attendues :
+- version package : 3.2.0-beta.2
+- JavaScript / JSON valides
+- pont audio Android inchangé (PCM 16 kHz + WAV local)
+- relais v1.1 : WebSocket téléphone -> relais -> OpenAI Realtime
+- rééchantillonnage relais 16 kHz -> 24 kHz avant Realtime
+- modèle live par défaut : gpt-live-transcribe
+- délai live par défaut : low
+- modèle final par défaut : gpt-transcribe
+- dictée Android maintenue comme secours
+- export .pvaud inchangé et compatible PC
+- artifact GitHub : Carnet-audition-v3.2-beta2-debug-apk

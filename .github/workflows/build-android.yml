@@ -61,5 +61,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Carnet-audition-v3.2-beta1-debug-apk
+          name: Carnet-audition-v3.2-beta2-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk

@@ -1,5 +1,5 @@
 (() => {
-  const APP_VERSION = '3.2.0-beta.1';
+  const APP_VERSION = '3.2.0-beta.2';
   const STORAGE_KEY = 'assistant-pv-carnet-draft-v1';
   const PROFILE_KEY = 'assistant-pv-carnet-investigator-profile-v1';
   const AI_SETTINGS_KEY = 'assistant-pv-carnet-ai-settings-v1';
@@ -222,6 +222,21 @@ Madagasikara`;
     const words = ($('#speechDictionary')?.value || '').split(/\n+/).map(x => x.trim()).filter(Boolean).slice(0, 100);
     const lang = ($('#speechLanguage')?.value || 'mg-MG').startsWith('fr') ? 'français' : 'malagasy de Madagascar';
     return `Transcription fidèle d'une audition de gendarmerie. Langue principale : ${lang}. Conserver les noms propres et les termes juridiques tels qu'ils sont prononcés. Vocabulaire métier fourni par l'utilisateur : ${words.join(', ')}`.slice(0, 1800);
+  }
+
+  function buildCloudKeywords() {
+    const raw = ($('#speechDictionary')?.value || '').split(/\n+/).map(x => x.trim()).filter(Boolean);
+    const seen = new Set();
+    const out = [];
+    for (const item of raw) {
+      const word = item.replace(/[<>\r\n]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100);
+      const key = word.toLocaleLowerCase('fr');
+      if (!word || seen.has(key)) continue;
+      seen.add(key);
+      out.push(word);
+      if (out.length >= 80) break;
+    }
+    return out;
   }
 
   async function testCloudConnection() {
@@ -534,7 +549,7 @@ Madagasikara`;
 
   async function startRecording(exchange, kind, card) {
     if (NativeAudioRecorder) return startNativeRecording(exchange, kind, card);
-    if (isNativeAndroid) throw new Error('Pont audio natif indisponible. Réinstallez la v3.2 beta.1 puis relancez l’application.');
+    if (isNativeAndroid) throw new Error('Pont audio natif indisponible. Réinstallez la v3.2 beta.2 puis relancez l’application.');
     return startWebRecording(exchange, kind, card);
   }
 
@@ -597,6 +612,7 @@ Madagasikara`;
         token: $('#onlineRelayToken')?.value || '',
         language: ($('#speechLanguage')?.value || 'mg-MG').toLowerCase().startsWith('fr') ? 'fr' : 'mg',
         prompt: buildCloudPrompt(),
+        keywords: buildCloudKeywords(),
         microProfile: $('#microProfile')?.value || 'near_field',
         appVersion: APP_VERSION,
       }));
@@ -630,32 +646,56 @@ Madagasikara`;
       for (const chunk of active.cloudPending.splice(0)) sendCloudChunk(active, chunk);
       return;
     }
-    if (msg.type === 'partial' || msg.type === 'final') {
+    if (msg.type === 'partial' || msg.type === 'final' || msg.type === 'refined') {
       const text = String(msg.text || '').trim();
       if (!text) return;
       active.cloudHasText = true;
       active.cloudText = text;
-      if (msg.type === 'final') active.cloudFinalText = text;
+      if (msg.type === 'final' || msg.type === 'refined') active.cloudFinalText = text;
       const value = [active.baseText, text].filter(Boolean).join(active.baseText ? ' ' : '').trim();
       textarea.value = value;
       if (active.kind === 'question') exchange.question = value; else exchange.answer = value;
       exchange[`${active.kind}CloudTranscript`] = text;
       exchange[`${active.kind}CloudModel`] = String(msg.model || 'online-transcription');
       exchange[`${active.kind}CloudLatencyMs`] = Number(msg.latencyMs || 0);
-      if (quality) quality.textContent = msg.type === 'final' ? 'Texte finalisé en ligne' : 'Correction en ligne en cours';
-      if (badge) { badge.hidden = false; badge.textContent = msg.type === 'final' ? 'Texte final' : 'Transcription en ligne'; }
-      status.textContent = msg.type === 'final' ? 'Audio conservé • transcription en ligne finalisée' : 'Audio en cours • texte corrigé en ligne';
+      if (msg.type === 'refined') {
+        exchange[`${active.kind}CloudRefinedTranscript`] = text;
+        exchange[`${active.kind}CloudRefinedModel`] = String(msg.model || 'gpt-transcribe');
+      }
+      if (quality) quality.textContent = msg.type === 'partial' ? 'Texte en ligne en direct' : msg.type === 'refined' ? 'Texte haute précision finalisé' : 'Texte temps réel finalisé';
+      if (badge) { badge.hidden = false; badge.textContent = msg.type === 'partial' ? 'En direct' : msg.type === 'refined' ? 'Haute précision' : 'Texte final'; }
+      status.textContent = msg.type === 'partial'
+        ? 'Audio en cours • texte en ligne en direct'
+        : msg.type === 'refined'
+          ? 'Audio conservé • transcription haute précision finalisée'
+          : msg.refinementPending
+            ? 'Audio conservé • texte temps réel prêt • amélioration finale en arrière-plan'
+            : 'Audio conservé • transcription en ligne finalisée';
       scheduleSave();
       if (msg.type === 'final') {
         updateCloudStatus('En ligne', 'is-online');
         active.cloudFinalResolve?.(text);
         active.cloudFinalResolve = null;
-        setTimeout(() => { try { active.cloudSocket?.close(); } catch (_) {} }, 350);
+        if (!msg.refinementPending) setTimeout(() => { try { active.cloudSocket?.close(); } catch (_) {} }, 250);
       }
       return;
     }
-    if (msg.type === 'status' && msg.value === 'finalizing') {
-      status.textContent = 'Audio conservé • finalisation de la transcription en ligne…';
+    if (msg.type === 'status' && (msg.value === 'finalizing' || msg.value === 'finalizing_live')) {
+      status.textContent = 'Audio conservé • finalisation du texte temps réel…';
+      return;
+    }
+    if (msg.type === 'status' && msg.value === 'refining') {
+      status.textContent = 'Audio conservé • texte temps réel prêt • amélioration haute précision en cours…';
+      return;
+    }
+    if (msg.type === 'refinement_error') {
+      if (quality) quality.textContent = 'Texte temps réel conservé';
+      status.textContent = 'Audio conservé • texte temps réel conservé • amélioration finale indisponible';
+      return;
+    }
+    if (msg.type === 'done') {
+      updateCloudStatus('En ligne', 'is-online');
+      setTimeout(() => { try { active.cloudSocket?.close(); } catch (_) {} }, 150);
       return;
     }
     if (msg.type === 'error') {
@@ -677,7 +717,7 @@ Madagasikara`;
       if (active.cloudReady && active.cloudSocket?.readyState === WebSocket.OPEN) sendCloudChunk(active, chunk);
       else {
         active.cloudPending.push(chunk);
-        if (active.cloudPending.length > 18) active.cloudPending.shift();
+        if (active.cloudPending.length > 50) active.cloudPending.shift();
       }
     }
   }
@@ -696,7 +736,7 @@ Madagasikara`;
       if (active.cloudSocket.readyState === WebSocket.OPEN) active.cloudSocket.send(JSON.stringify({ type: 'stop' }));
     } catch (_) {}
     if (!active.cloudFinalPromise) return active.cloudFinalText || '';
-    return Promise.race([active.cloudFinalPromise, sleep(1400).then(() => active.cloudFinalText || '')]);
+    return Promise.race([active.cloudFinalPromise, sleep(1200).then(() => active.cloudFinalText || '')]);
   }
 
   async function pollNativeTranscript(active, finalPass = false) {
@@ -913,7 +953,7 @@ Madagasikara`;
   async function runNativeDiagnostics() {
     const el = $('#exportStatus');
     if (!NativeAudioRecorder) {
-      el.textContent = 'ERREUR : pont audio natif indisponible. Vérifiez que la v3.2 beta.1 est bien installée.';
+      el.textContent = 'ERREUR : pont audio natif indisponible. Vérifiez que la v3.2 beta.2 est bien installée.';
       return;
     }
     try {

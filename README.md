@@ -1,57 +1,57 @@
-# Carnet d’audition — Assistant PV Gendarmerie v3.2.0-beta.1
+# Carnet d’audition — Assistant PV Gendarmerie v3.2.0-beta.2
 
-Cette version part de la v3.1 beta.3 validée sur Android et ajoute une refonte de l’interface, une vraie icône d’installation et un mode de transcription en ligne haute précision avec secours automatique. Le relais ne reçoit jamais la clé du fournisseur depuis l’APK ; seuls l’audio nécessaire à la transcription et, si vous le renseignez, le vocabulaire métier du champ Dictionnaire sont envoyés au service en ligne.
+Version terrain avec interface professionnelle, audio natif, profil enquêteur persistant, export `.pvaud`, dictée Android de secours et **transcription en ligne réellement temps réel** via un relais sécurisé.
 
-## Nouveautés principales
+## Nouveauté beta.2
 
-- Interface entièrement revue : style sobre, professionnel, sans emojis, animations discrètes, meilleure hiérarchie visuelle et boutons d’enregistrement plus clairs.
-- Icône Assistant PV appliquée à l’APK Android et à l’écran d’installation.
-- Mode **En ligne haute précision** : la dictée Android continue d’afficher un texte provisoire immédiatement, pendant que l’audio PCM est envoyé vers un relais sécurisé. Le texte cloud corrige progressivement le texte provisoire.
-- Secours automatique : si le réseau ou le relais tombe, l’enregistrement audio continue et la dictée Android reste active.
-- Mode **Dictée Android** conservé.
-- Mode **Local privé** conservé avec le moteur local existant.
-- Le profil enquêteur reste enregistré et modifiable.
-- L’export `.pvaud` conserve désormais la transcription provisoire et la transcription en ligne, en plus des audios.
+Le mode **En ligne haute précision** n’envoie plus des fenêtres audio successives à une API de fichiers. Le relais ouvre désormais une session de transcription Realtime persistante : le texte peut arriver sous forme de deltas pendant que la personne parle. Après l’arrêt, le texte temps réel est immédiatement conservé, puis une révision finale haute précision peut le corriger en arrière-plan.
 
-## Pourquoi un relais sécurisé ?
+Architecture :
 
-La clé du fournisseur de transcription ne doit jamais être incluse dans l’APK. Le dossier `relay/` contient un petit serveur Node.js qui garde la clé côté serveur et reçoit uniquement le flux audio de la Question/Réponse.
+```text
+Micro Android (audio original conservé)
+        │
+        ├─ Dictée Android de secours
+        │
+        └─ PCM 16 kHz → relais HTTPS/WSS
+                         │
+                         ├─ Realtime : gpt-live-transcribe
+                         │     → texte en direct
+                         │
+                         └─ Final : gpt-transcribe
+                               → correction après arrêt
+```
 
-Le relais utilise par défaut :
-
-- `gpt-4o-mini-transcribe` pour les corrections rapides pendant la parole ;
-- `gpt-transcribe` pour la transcription finale après l’arrêt.
-
-La langue envoyée est `mg` pour le malagasy. Le dictionnaire prioritaire, s’il est renseigné, est transmis comme contexte de transcription. Le profil enquêteur et l’identité de la personne ne sont pas ajoutés automatiquement au contexte en ligne.
+La clé API reste uniquement sur le serveur `relay/`, jamais dans l’APK.
 
 ## Mise à jour du dépôt Android
 
-Après décompression du ZIP :
+Après décompression :
 
 ```bash
 cd ~/carnet-audition
-cp -r /sdcard/Download/carnet-audition-mobile-v3.2.0-beta1/. .
+cp -r /sdcard/Download/carnet-audition-mobile-v3.2.0-beta2/. .
 npm install
 git add -A
-git commit -m "Modern UI and online Malagasy transcription v3.2"
+git commit -m "Realtime online Malagasy transcription v3.2 beta2"
 git push origin main
 ```
 
-GitHub Actions construit l’artifact :
+GitHub Actions produit l’artifact :
 
-`Carnet-audition-v3.2-beta1-debug-apk`
+`Carnet-audition-v3.2-beta2-debug-apk`
 
-## Configuration du mode en ligne
+## Relais en ligne
 
-1. Déployer le dossier `relay/` sur un serveur Node.js exposé en HTTPS/WSS.
-2. Définir sur ce serveur `OPENAI_API_KEY` et `APP_SHARED_SECRET`.
-3. Dans l’application, choisir **En ligne haute précision**.
-4. Renseigner l’URL `wss://...` du relais et le jeton `APP_SHARED_SECRET`.
-5. Appuyer sur **Tester la connexion**.
-6. Quand le statut indique **Connexion sécurisée**, faire un essai fictif avant une audition réelle.
+Le dossier `relay/` contient la version 1.1.0. Déployez **ce dossier seul** dans un dépôt séparé ou placez son contenu à la racine du dépôt du relais. Les étapes Render sont décrites dans `relay/README.md`.
 
-Ne placez jamais `OPENAI_API_KEY` dans GitHub, dans Termux en clair dans le projet, ni dans l’application mobile.
+Dans l’application :
 
-## Confidentialité
+1. choisissez **En ligne haute précision** ;
+2. renseignez l’URL HTTPS/WSS du relais ;
+3. renseignez le même `APP_SHARED_SECRET` ;
+4. appuyez sur **Tester la connexion** ;
+5. choisissez Malagasy ;
+6. commencez une Question ou une Réponse.
 
-En mode en ligne, le flux audio de la Question/Réponse est transmis au service configuré pour transcription. L’identité complète de la personne, le profil de l’enquêteur et le fichier `.pvaud` ne sont pas envoyés par le relais fourni. Utiliser ce mode pour des données réelles uniquement si le cadre de travail de l’unité autorise le service distant choisi.
+Pour une vraie audition, le mode en ligne transmet le flux audio au service de transcription configuré. Utilisez-le uniquement si le cadre de confidentialité de votre unité l’autorise. L’audio original reste enregistré sur le téléphone même en cas de coupure réseau.

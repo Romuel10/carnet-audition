@@ -1,6 +1,6 @@
 {
   "name": "carnet-audition-assistant-pv",
-  "version": "3.2.0-beta.1",
+  "version": "3.2.0-beta.2",
   "private": true,
   "description": "Carnet d'audition mobile professionnel : audio natif, transcription Malagasy en ligne haute précision avec secours Android, profil enquêteur persistant, mode local et export .pvaud.",
   "scripts": {

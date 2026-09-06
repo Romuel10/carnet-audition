@@ -14,7 +14,11 @@ services:
         sync: false
       - key: APP_SHARED_SECRET
         sync: false
-      - key: OPENAI_PREVIEW_MODEL
-        value: gpt-4o-mini-transcribe
+      - key: OPENAI_LIVE_MODEL
+        value: gpt-live-transcribe
+      - key: OPENAI_LIVE_DELAY
+        value: low
       - key: OPENAI_FINAL_MODEL
         value: gpt-transcribe
+      - key: OPENAI_FINAL_REFINEMENT
+        value: "true"
